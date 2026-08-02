@@ -269,7 +269,16 @@ def main() -> None:
             print(f"warmup: {name} -> {c['id']} ({n} chunk terindeks)")
         return
     logging.basicConfig(level=logging.WARNING)
-    mcp.run()
+    argv = sys.argv[1:]
+    if "--transport" in argv:
+        transport = argv[argv.index("--transport") + 1]
+    else:
+        transport = "stdio"
+    if transport == "http":
+        port = int(argv[argv.index("--port") + 1]) if "--port" in argv else 4041
+        mcp.run(transport="http", host="127.0.0.1", port=port)
+    else:
+        mcp.run()
 
 
 if __name__ == "__main__":

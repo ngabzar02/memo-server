@@ -5,6 +5,7 @@ Usage: memo  (stdio MCP server, registered via uv tool install)
 
 import json
 import logging
+import sqlite3
 import sys
 import threading
 from typing import Any
@@ -60,7 +61,18 @@ def _get_docs(library_id: str, query: str, version: str | None = None) -> list[d
     vec = _embeddings().embed([query])
     query_vec = [float(x) for x in list(vec)[0]]  # numpy float32 -> float, utk json.dumps
     hits = store.search(conn, library_id, query, k=10, query_vec=query_vec)
-    if not hits:
+    stale = not version and len(store.get_versions(conn, library_id)) <= 1
+    if (not hits or stale) and (not version and _docs_changed(conn, library_id)):
+        # stale trap: docs_url alias berubah (fastapi README -> /reference/deps);
+        # lib versi<=1 (indikasi DB lama/README dangkal) -> cek ulang tiap call
+        lib = store.get_lib(conn, library_id)  # di-drop oleh _docs_changed
+        if not lib:
+            cands = registry.resolve(library_id)
+            if not cands:
+                return []
+            lib = cands[0]
+            lib["versions"] = json.dumps([lib["latest_ver"]] if lib.get("latest_ver") else [])
+            store.upsert_lib(conn, lib)
         chunks = ingest.ingest_lib(lib.get("docs_url") or f"https://{lib.get('repo','')}")
         if not chunks:
             return []
@@ -74,16 +86,36 @@ def _get_docs(library_id: str, query: str, version: str | None = None) -> list[d
     return store.trim_to_tokens(hits)
 
 
+def _docs_changed(conn: sqlite3.Connection, library_id: str) -> bool:
+    """True jika docs_url resolve != DB -> drop lib (minta re-ingest). Network: cek tipis."""
+    lib = store.get_lib(conn, library_id)
+    if not lib:
+        return False
+    cands = registry.resolve(library_id)
+    if not cands:
+        return False
+    new_url = cands[0].get("docs_url") or f"https://{cands[0].get('repo', '')}"
+    old_url = lib.get("docs_url") or f"https://{lib.get('repo', '')}"
+    if new_url != old_url:
+        store.drop_lib(conn, library_id)
+        return True
+    return False
+
+
 @mcp.tool()
 def versions(library_id: str) -> list[str]:
-    """List known versions for a library."""
+    """List known versions for a library (history dari npm/PyPI bila tersedia)."""
     conn = store.connect()
     vs = store.get_versions(conn, library_id)
-    if not vs:
+    if not vs or len(vs) <= 1:  # DB lama/alias tanpa riwayat -> resolve segar
         cands = registry.resolve(library_id)
         if cands:
             vs = json.loads(cands[0].get("versions") or "[]")
-            store.upsert_lib(conn, cands[0])
+            if len(vs) <= 1:  # alias/builtin tak bawa versi -> tanya npm/PyPI
+                vs = registry.versions_of(library_id)
+            if vs:
+                cands[0]["versions"] = json.dumps(vs)
+                store.upsert_lib(conn, cands[0])
     return vs
 
 

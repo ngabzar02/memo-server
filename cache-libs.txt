@@ -68,3 +68,7 @@ py:subprocess
 py:sqlite3
 py:datetime
 py:itertools
+prisma
+astro
+polars
+duckdb

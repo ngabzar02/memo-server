@@ -133,6 +133,19 @@ def _pypi(name: str) -> dict | None:
         return None
 
 
+def versions_of(name: str) -> list[str]:
+    """Riwayat versi langsung dari npm/PyPI (alias/builtin tanpa versi sendiri)."""
+    vs: list[str] = []
+    for fn in (_npm, _pypi):
+        try:
+            hit = fn(name)
+            if hit and hit.get("versions"):
+                vs.extend(hit["versions"])
+        except Exception:  # noqa: BLE001
+            continue
+    return list(dict.fromkeys(vs))  # unik, urutan pertemuan
+
+
 def _norm(s: str) -> str:
     """Normalize repo basename for fuzzy match: lower, strip [._-]."""
     return re.sub(r"[._\-]+", "", s.lower())

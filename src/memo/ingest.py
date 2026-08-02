@@ -37,34 +37,39 @@ def parse_llms(text: str) -> list[dict]:
 
 
 def chunk_text(text: str, max_tokens: int = CHUNK_TOKENS, overlap: int = OVERLAP_TOKENS) -> list[str]:
-    """Split by paragraphs into ~max_tokens (~4 chars/token), overlap paragraphs."""
-    paras = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
-    chunks, cur, cur_tokens = [], [], 0
-    for p in paras:
-        # hard-cut a single oversized paragraph (e.g. minified README)
-        while len(p) > max_tokens * 4:
-            cut = p[: max_tokens * 4]
-            p = p[max_tokens * 4:]
+    """Split by sections (heading-aware): tiap section H1-H4 jadi unit sendiri,
+    heading ikut sebagai breadcrumb; code block tidak dipotong."""
+    lines = text.splitlines()
+    sections, cur = [], []
+    for ln in lines:
+        is_h = re.match(r"^#{1,4} ", ln) is not None
+        in_code = [l.startswith("```") for l in cur[::-1]]
+        if is_h and not any(in_code):
             if cur:
-                chunks.append("\n\n".join(cur))
-                cur, cur_tokens = [], 0
-            chunks.append(cut)
-        pt = max(1, len(p) // 4)
-        if cur and cur_tokens + pt > max_tokens:
-            chunks.append("\n\n".join(cur))
-            # overlap: keep tail paragraphs up to overlap budget
-            tail, tt = [], 0
-            for q in reversed(cur):
-                if tt + max(1, len(q) // 4) > overlap:
-                    break
-                tail.insert(0, q)
-                tt += max(1, len(q) // 4)
-            cur, cur_tokens = tail, tt
-        cur.append(p)
-        cur_tokens += pt
+                sections.append("\n".join(cur))
+            cur = [ln]
+        else:
+            cur.append(ln)
     if cur:
-        chunks.append("\n\n".join(cur))
-    return chunks or [text]
+        sections.append("\n".join(cur))
+    # split ulang section raksasa (hard cap ~4x max_tokens)
+    out = []
+    for sec in sections:
+        if len(sec) <= max_tokens * 4:
+            out.append(sec)
+            continue
+        para = [p.strip() for p in re.split(r"\n\s*\n", sec) if p.strip()]
+        cur2, cur_tok = [], 0
+        for p in para:
+            pt = max(1, len(p) // 4)
+            if cur2 and cur_tok + pt > max_tokens:
+                out.append("\n\n".join(cur2))
+                cur2, cur_tok = [], 0
+            cur2.append(p)
+            cur_tok += pt
+        if cur2:
+            out.append("\n\n".join(cur2))
+    return out or [text]
 
 
 def ingest_docs(url: str) -> list[dict]:

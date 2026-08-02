@@ -44,6 +44,12 @@ def init(conn: sqlite3.Connection) -> None:
         conn.commit()
     except sqlite3.OperationalError:
         pass  # kolom sudah ada
+    try:  # migrasi: freshness (ETag + kapan dicek)
+        conn.execute("ALTER TABLE libs ADD COLUMN etag TEXT DEFAULT ''")
+        conn.execute("ALTER TABLE libs ADD COLUMN last_check TEXT DEFAULT ''")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # kolom sudah ada
     conn.execute(
         """CREATE TABLE IF NOT EXISTS chunks (
             id INTEGER PRIMARY KEY AUTOINCREMENT, lib_id TEXT, ver TEXT,
@@ -166,7 +172,8 @@ def get_lib(conn: sqlite3.Connection, lib_id: str) -> dict | None:
     r = conn.execute("SELECT * FROM libs WHERE id=?", (lib_id,)).fetchone()
     if not r:
         return None
-    cols = ["id", "name", "repo", "docs_url", "trust", "latest_ver", "versions", "full"]
+    cols = ["id", "name", "repo", "docs_url", "trust", "latest_ver", "versions",
+            "full", "etag", "last_check"]
     return dict(zip(cols, r))
 
 

@@ -40,6 +40,39 @@ def _embeddings():
     return _embeddings.model
 
 
+_reranker = None
+
+
+def _get_reranker():
+    """Cross-encoder reranker (lazy, model qint8 ~25MB). top-10 rerank ~0.3-0.8s
+    di ARM — default ON; gagal load (offline/hilang) -> fallback hybrid saja."""
+    global _reranker
+    if _reranker is None:
+        try:
+            from memo.rerank import CrossReranker
+            _reranker = CrossReranker(threads=2)
+        except Exception as e:  # noqa: BLE001
+            log.warning("reranker off: %s", str(e)[:100])
+            _reranker = False
+    return _reranker or None
+
+
+def _rerank(query: str, hits: list[dict[str, Any]], top_n: int = 10) -> list[dict[str, Any]]:
+    """Skor ulang top-N hits dgn cross-encoder (query,doc) -> urut ulang.
+    Fast path: <2 hits atau reranker off -> tanpa perubahan."""
+    r = _get_reranker()
+    if not r or len(hits) < 2:
+        return hits
+    pairs = [(query, h["text"][:1000]) for h in hits[:top_n]]
+    try:
+        scores = list(r.rerank(pairs))
+        scored = sorted(zip(scores, hits[:top_n]), key=lambda s: -s[0])
+        return [h for _, h in scored] + hits[top_n:]
+    except Exception as e:  # noqa: BLE001
+        log.warning("rerank failed: %s", str(e)[:100])
+        return hits
+
+
 @mcp.tool()
 def resolve_library_id(library_name: str, query: str = "") -> list[dict[str, Any]]:
     """Resolve a library name (e.g. 'flask', 'nextjs') to candidate library IDs
@@ -74,6 +107,8 @@ def _get_docs(library_id: str, query: str, version: str | None = None,
         # resolve 14s per call. resolve dicache TTL di registry.
         if _docs_changed(conn, library_id):
             lib = store.get_lib(conn, library_id)  # di-drop -> None
+    if lib and not version:
+        _maybe_refresh(conn, lib)  # freshness: versi baru -> drop chunks (re-ingest)
     has_chunks = lib is not None and chunk_count > 0
     full = (lib or {}).get("full", 1)
     if not lib:
@@ -118,6 +153,7 @@ def _get_docs(library_id: str, query: str, version: str | None = None,
             conn.execute("UPDATE libs SET full=? WHERE id=?", (1 if complete else 0, library_id))
             conn.commit()
         hits = store.search(conn, library_id, query, k=10, query_vec=query_vec)
+    hits = _rerank(query, hits)
     return store.trim_to_tokens(hits)
 
 
@@ -133,6 +169,34 @@ def _docs_changed(conn: sqlite3.Connection, library_id: str) -> bool:
     old_url = lib.get("docs_url") or f"https://{lib.get('repo', '')}"
     if new_url != old_url:
         store.drop_lib(conn, library_id)
+        return True
+    return False
+
+
+def _maybe_refresh(conn: sqlite3.Connection, lib: dict) -> bool:
+    """Freshness: cek versi terbaru periodik (TTL by popularitas: trust>5 = 1d,
+    lain 7d). Versi berubah -> update + drop chunks (re-ingest saat dipakai).
+    Returns True bila lib di-drop (perlu re-ingest)."""
+    last = lib.get("last_check") or ""
+    ttl = 86400 if float(lib.get("trust", 0)) > 5 else 604800
+    if last:
+        from datetime import datetime
+        try:
+            age = (datetime.utcnow() - datetime.fromisoformat(last)).total_seconds()
+            if age < ttl:
+                return False
+        except ValueError:
+            pass
+    latest, _, vs = registry.version_etag(lib["id"], lib.get("etag", ""))
+    conn.execute("UPDATE libs SET last_check=datetime('now') WHERE id=?", (lib["id"],))
+    conn.commit()
+    if latest and latest != lib.get("latest_ver"):
+        old = lib.get("latest_ver")
+        conn.execute("UPDATE libs SET latest_ver=?, versions=? WHERE id=?",
+                     (latest, json.dumps(vs or []), lib["id"]))
+        if old:
+            conn.execute("DELETE FROM chunks WHERE lib_id=? AND ver=?", (lib["id"], old))
+        conn.commit()
         return True
     return False
 

@@ -45,5 +45,8 @@ Panggil `resolve_library_id` lalu `get_docs` untuk tiap pasangan berikut (satu p
 
 ## Hasil
 
-Saya jalankan `python bench/score.py` → skor hit@1/hit@5 vs Context7 baseline
-(resolve 86%, docs 28%) → perbaikan berikutnya.
+Ketik "bench done" → saya (O) menjalankan **swarm** (lihat `bench/swarm.md`):
+agent B (skor) → R (riset akar miss) ‖ T (tuning) → F (fix) → RV (audit) →
+instruksi restart untuk round berikutnya. Target: docs hit@5 ≥ 40%.
+
+Setiap round dicatat di `bench/rounds/R{n}.md`; state live di `bench/state.md`.

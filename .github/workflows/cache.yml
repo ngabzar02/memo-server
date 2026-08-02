@@ -11,6 +11,9 @@ on:
 env:
   GITHUB_TOKEN: ${{ github.token }}
 
+permissions:
+  contents: write  # gh release create/delete butuh ini (403 tanpa izin)
+
 jobs:
   build-cache:
     runs-on: ubuntu-latest

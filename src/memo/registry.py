@@ -11,6 +11,8 @@ import json
 import math
 import os
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
@@ -75,7 +77,7 @@ def _dir_entry(name: str) -> dict | None:
     """directory.llmstxt.cloud: GET /{name}/llms.txt -> docs_url."""
     try:
         r = httpx.get(f"https://directory.llmstxt.cloud/{_clean_id(name)}/llms.txt",
-                      timeout=10, follow_redirects=True)
+                      timeout=3, follow_redirects=True)
         if r.status_code == 200 and len(r.text) > 100:
             return {"docs_url": str(r.url).removesuffix("llms.txt")}
     except httpx.HTTPError:
@@ -118,17 +120,19 @@ def _npm(name: str) -> dict | None:
 
 def _pypi(name: str) -> dict | None:
     try:
-        r = httpx.get(f"https://pypi.org/pypi/{name}/json", timeout=10)
+        r = httpx.get(f"https://pypi.org/pypi/{name}/json", timeout=6)
         if r.status_code != 200:
             return None
         d = r.json()  # releases ada di top-level, bukan di "info"
         info = d["info"]
         urls = info.get("project_urls") or {}
+        # Documentation > Source/homepage: docs resmi langsung, hemat dir_entry
+        docs = urls.get("Documentation") or urls.get("Documentation, ") or ""
         repo = urls.get("Source", "") or info.get("home_page", "") or ""
         m = re.search(r"github.com[/:]([\w.-]+/[\w.-]+)", repo)
         return {"repo": m.group(1) if m else "", "latest_ver": info.get("version", ""),
                 "trust": 0.0,  # PyPI JSON API tanpa download count; trust dari GitHub/npm
-                "docs_url": "",
+                "docs_url": docs,
                 "versions": list(d.get("releases", {}).keys())[-20:]}
     except (httpx.HTTPError, ValueError, KeyError):
         return None
@@ -207,27 +211,58 @@ def _norm_url(docs_url: str) -> str:
     return docs_url.rstrip("/")
 
 
+_CACHE_TTL = 3600  # 1 jam: resolve mahal (6 sumber jaringan); hit ~0ms
+_cache: dict[str, tuple[float, list[dict]]] = {}
+
+
 def resolve(name: str, query: str = "") -> list[dict]:
-    """Return candidates [{id, name, repo, docs_url, trust, latest_ver, versions}]."""
+    """Return candidates [{id, name, repo, docs_url, trust, latest_ver, versions}].
+    TTL-cache per name: resolve penuh = 6 panggilan jaringan ~14s di ARM."""
+    key = f"{name}|{query}"
+    hit = _cache.get(key)
+    if hit and time.monotonic() - hit[0] < _CACHE_TTL:
+        return hit[1]
+    out = _resolve(name, query)
+    _cache[key] = (time.monotonic(), out)
+    return out
+
+
+def _norm_cand(hit: dict, name: str) -> dict:
+    return {
+        "id": hit.get("id") or _clean_id(name),
+        "name": name,
+        "repo": hit.get("repo", ""),
+        "docs_url": _norm_url(hit.get("docs_url", "")),
+        "trust": float(hit.get("trust", 0.0)),
+        "latest_ver": hit.get("latest_ver", ""),
+        "versions": json.dumps(hit.get("versions") or ([hit["latest_ver"]] if hit.get("latest_ver") else [])),
+    }
+
+
+def _resolve(name: str, query: str = "") -> list[dict]:
+    """6 sumber network dijalankan PARALEL (ThreadPool): resolve 12.5s -> ~2-3s.
+    alias/builtin instan -> langsung saja; sisanya paralel."""
     cands = []
-    for label, fn in (("alias", lambda: _alias(name)),
-                      ("builtin", lambda: _builtin(name, query)),
-                      ("llmstxt", lambda: _dir_entry(name)),
-                      ("npm", lambda: _npm(name)),
-                      ("pypi", lambda: _pypi(name)),
-                      ("github", lambda: _gh_search(name, query))):
+    for fn in (lambda: _alias(name), lambda: _builtin(name, query)):
         hit = fn()
-        if not hit:
-            continue
-        cands.append({
-            "id": hit.get("id") or _clean_id(name),
-            "name": name,
-            "repo": hit.get("repo", ""),
-            "docs_url": _norm_url(hit.get("docs_url", "")),
-            "trust": float(hit.get("trust", 0.0)),
-            "latest_ver": hit.get("latest_ver", ""),
-            "versions": json.dumps(hit.get("versions") or ([hit["latest_ver"]] if hit.get("latest_ver") else [])),
-        })
+        if hit:
+            cands.append(hit)
+            if "trust" in hit and float(hit.get("trust", 0)) > 90:
+                return [_norm_cand(hit, name)]  # alias/builtin curated: final, tanpa network
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        futures = {ex.submit(fn): label for label, fn in (
+            ("llmstxt", lambda: _dir_entry(name)),
+            ("npm", lambda: _npm(name)),
+            ("pypi", lambda: _pypi(name)),
+            ("github", lambda: _gh_search(name, query)))}
+        for f, label in futures.items():
+            try:
+                hit = f.result()
+            except Exception:  # noqa: BLE001 — satu sumber gagal, lanjut
+                continue
+            if not hit:
+                continue
+            cands.append(_norm_cand(hit, name))
     # dedupe by repo/docs_url: keep highest trust, merge non-empty fields
     seen, out = {}, []
     for c in sorted(cands, key=lambda c: -c["trust"]):

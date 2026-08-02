@@ -92,7 +92,75 @@ def _gh_raw(docs_url: str) -> list[dict] | None:
     return None
 
 
-def ingest_lib(docs_url: str, deadline: float | None = None) -> tuple[list[dict], bool]:
+def _crawl(start_url: str, deadline: float, existing: set[str] | None = None,
+           query: str = "") -> list[dict]:
+    """Docs tanpa llms.txt/sitemap (numpy, requests, dll): BFS ber-tingkat dgn
+    prioritas tutorial/user/reference + URL yg match kata kunci query (halaman
+    yg paling mungkin menjawab diproses duluan), fetch 4 PARALEL. Budget
+    deadline + cap 200 chunk. existing: path sudah ter-chunk di DB -> skip."""
+    import urllib.parse as up
+    from concurrent.futures import ThreadPoolExecutor
+    base = start_url.rstrip("/") + "/"  # urljoin butuh dir base (tanpa slash = file)
+    terms = [t.lower() for t in re.findall(r"[a-z]+", query.lower()) if len(t) > 3]
+
+    def page(url: str) -> tuple[str | None, str]:
+        try:
+            r = httpx.get(url, timeout=8, follow_redirects=True,
+                          headers={"User-Agent": "memo/1.0"})
+        except httpx.HTTPError:
+            return None, ""
+        if r.status_code != 200:
+            return None, ""
+        text = trafilatura.extract(r.text, include_comments=False) or ""
+        return text, r.text  # text utk chunk, html mentah utk link BFS
+
+    def prio(u: str) -> int:
+        # URL yg match query term = -1 (diproses duluan: jawab relevansi cepat)
+        ul = u.lower()
+        if any(t in ul for t in terms):
+            return -1
+        if any(s in u for s in ("/basics", "basics.", "/tutorial", "/getting-started", "/user/")):
+            return 0
+        if any(s in u for s in ("/reference/", "/guide/", "/api/", "/en/latest/")):
+            return 1
+        return 2
+
+    seen, out, queue = set(), [], [base]
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        while queue and time.monotonic() < deadline and len(out) < 200:
+            # ambil batch URL prioritas tertinggi, fetch paralel
+            batch, frontier = [], []
+            for url in sorted(queue, key=prio):  # prio 0 dulu (ascending)
+                if url in seen or (existing and url in existing):
+                    continue
+                if len(batch) >= 4:
+                    break
+                batch.append(url)
+                seen.add(url)
+            queue = [u for u in queue if u not in set(batch)]
+            if not batch:
+                break
+            for url, (text, html) in zip(batch, ex.map(page, batch)):
+                if not text:
+                    continue
+                title = re.sub(r"^#+\s*", "", text.splitlines()[0])[:80] if text.splitlines() else url
+                for c in chunk_text(text):
+                    out.append({"path": url, "title": title, "text": c})
+                if len(out) >= 200:
+                    break
+                # link internal; relatif ke HALAMAN INI (bukan base) -> path benar
+                nxt = []
+                for href in re.findall(r'href="([^"#?]+)', html):
+                    u = up.urljoin(url, href)
+                    if (u.startswith(base) and u not in seen
+                            and not any(s in u for s in ("_static", "_sources", "genindex", "search.html", "404", "whatsnew/", "release/"))):
+                        nxt.append(u)
+                queue.extend(nxt)
+    return out
+
+
+def ingest_lib(docs_url: str, deadline: float | None = None,
+               existing: set[str] | None = None, query: str = "") -> tuple[list[dict], bool]:
     """docs_url + /llms-full.txt -> try llms-full, else llms, else single page.
     Returns (chunks, complete). complete=False bila deadline tercapai -> server
     menyimpan parsial dan melanjutkan di call berikutnya.
@@ -101,7 +169,9 @@ def ingest_lib(docs_url: str, deadline: float | None = None) -> tuple[list[dict]
     if deadline is None:
         deadline = time.monotonic() + 60
     for candidate in (f"{base}/llms-full.txt", f"{base}/llms.txt"):
-        text = fetch_text(candidate)
+        # probe pendek: llms.txt kecil; 404/slow = langsung ke sumber berikut.
+        # deadline absolute: probe yg lama mencuri budget crawl.
+        text = fetch_text(candidate, timeout=6)
         if not text:
             continue
         pages = parse_llms(text)
@@ -121,6 +191,10 @@ def ingest_lib(docs_url: str, deadline: float | None = None) -> tuple[list[dict]
     raw = _gh_raw(base)
     if raw is not None:
         return raw, True
+    if not base.startswith(("https://github.com/", "http://github.com/")):
+        crawled = _crawl(base, deadline, existing, query=query)
+        if crawled:
+            return crawled, True
     return ingest_docs(base), True
 
 

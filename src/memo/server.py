@@ -18,10 +18,15 @@ from memo import ingest, registry, store
 log = logging.getLogger("memo")
 mcp = FastMCP("memo")
 
-# ingest+embed tidak thread-safe (fastembed first-load race -> crash paralel);
-# cache hit sub-ms jadi antrian lock pendek. ponytail: lock global, per-lib
-# lock kalau throughput nyata butuh.
-_INGEST_LOCK = threading.Lock()
+# ingest embed+sqlite thread-safe (ORT concurrent run TERUJI 6-thread aman);
+# lock per-library hanya mencegah 2 ingest lib sama bersamaan.
+_lib_locks: dict[str, threading.Lock] = {}
+_lib_locks_guard = threading.Lock()
+
+
+def _lock_for(lib_id: str) -> threading.Lock:
+    with _lib_locks_guard:
+        return _lib_locks.setdefault(lib_id, threading.Lock())
 
 
 def _embeddings():
@@ -29,7 +34,9 @@ def _embeddings():
     if not hasattr(_embeddings, "model"):
         from fastembed import TextEmbedding
 
-        _embeddings.model = TextEmbedding("BAAI/bge-small-en-v1.5")
+        # threads=2 + batch 8 = 89ms/chunk di ARM (vs 798ms default: thread
+        # contention ORT). batch >8 diminishing; threads>2 contention.
+        _embeddings.model = TextEmbedding("BAAI/bge-small-en-v1.5", threads=2)
     return _embeddings.model
 
 
@@ -44,31 +51,30 @@ def resolve_library_id(library_name: str, query: str = "") -> list[dict[str, Any
 def get_docs(library_id: str, query: str, version: str | None = None) -> list[dict[str, Any]]:
     """Get relevant documentation chunks for a library and query.
     Cache hit: sub-ms. Cache miss: fetch+ingest+index once (~5-60s first time)."""
-    with _INGEST_LOCK:  # cold ingest/embed serial: crash paralel = fatal
+    with _lock_for(library_id):  # paralel antar lib; serial utk lib sama
         return _get_docs(library_id, query, version,
                          deadline=time.monotonic() + _REQUEST_BUDGET)
 
-
 # batas waktu request MCP: client timeout ~30s lalu disconnect -> proses keluar.
-# deadline 22s menjamin request selesai sebelum timeout; sisa ingest dilanjutkan
-# di call berikutnya (flag full=0 -> re-ingest parsial).
-_REQUEST_BUDGET = 22.0
+# deadline 20s (bufer utk embed + resolve) menjamin request selesai sebelum
+# timeout; sisa ingest dilanjutkan di call berikutnya (flag full=0 -> lanjut).
+_REQUEST_BUDGET = 20.0
 
 
 def _get_docs(library_id: str, query: str, version: str | None = None,
               deadline: float | None = None) -> list[dict[str, Any]]:
     conn = store.connect()
     lib = store.get_lib(conn, library_id)
-    if lib and not version and len(store.get_versions(conn, library_id)) <= 1:
-        # stale trap: docs_url alias berubah (fastapi README -> /reference/deps);
-        # lib versi<=1 (DB lama/README dangkal/ingest timeout) -> cek ulang tiap call.
-        # ponytail: 1 resolve ekstra per call utk lib semacam ini; ganti ke
-        # TTL fetched_at di libs bila network jadi masalah nyata.
+    chunk_count = conn.execute(
+        "SELECT COUNT(*) FROM chunks WHERE lib_id=?", (library_id,)
+    ).fetchone()[0]
+    if lib and not version and "github.com" in (lib.get("docs_url") or ""):
+        # trap hanya utk docs_url yg masih README GitHub (fastapi/requests dulu
+        # bocor ke sini); docs_url resmi (numpy.org dll) jarang pindah -> skip
+        # resolve 14s per call. resolve dicache TTL di registry.
         if _docs_changed(conn, library_id):
             lib = store.get_lib(conn, library_id)  # di-drop -> None
-    has_chunks = lib is not None and conn.execute(
-        "SELECT COUNT(*) FROM chunks WHERE lib_id=?", (library_id,)
-    ).fetchone()[0] > 0
+    has_chunks = lib is not None and chunk_count > 0
     full = (lib or {}).get("full", 1)
     if not lib:
         cands = registry.resolve(library_id, query)
@@ -85,22 +91,32 @@ def _get_docs(library_id: str, query: str, version: str | None = None,
     if not has_chunks or (not version and not full):
         # lib baru / ingest parsial (deadline tercapai sebelumnya): fetch+index
         # lanjutan. hits kosong pd lib lengkap TIDAK memicu re-ingest.
+        crawl_deadline = deadline - 2 if deadline else None  # FTS instan: sisakan utk index+search
+        existing = {r[0] for r in conn.execute(
+            "SELECT path FROM chunks WHERE lib_id=?", (library_id,))}
         chunks, complete = ingest.ingest_lib(
-            lib.get("docs_url") or f"https://{lib.get('repo','')}", deadline=deadline)
+            lib.get("docs_url") or f"https://{lib.get('repo','')}",
+            deadline=crawl_deadline, existing=existing, query=query)
         if not chunks:
-            return []
-        chunks = chunks[:200]  # cap: 200 embed ~2 menit di ARM; cukup utk top docs
-        embs = []
-        for i in range(0, len(chunks), 64):  # batch embed: spike RAM kecil
-            if deadline and time.monotonic() > deadline:
-                chunks = chunks[:len(embs)]
-                complete = False
-                break
-            embs.extend(_embeddings().embed([c["text"] for c in chunks[i:i+64]]))
-        store.add_chunks(conn, library_id, ver, chunks[:len(embs)],
-                         [[float(x) for x in e] for e in embs])
-        conn.execute("UPDATE libs SET full=? WHERE id=?", (1 if complete else 0, library_id))
-        conn.commit()
+            if not has_chunks:
+                return []
+            conn.execute("UPDATE libs SET full=? WHERE id=?", (1 if complete else 0, library_id))
+            conn.commit()
+        else:
+            chunks = chunks[:200]  # cap: 200 embed ~3 menit di ARM; cukup utk top docs
+            if deadline is None:
+                # warmup/CI (tanpa budget): embed penuh utk release cache
+                embs: list[list[float] | None] = []
+                for i in range(0, len(chunks), 8):  # batch 8: optimal ORT ARM
+                    embs.extend([[float(x) for x in e] for e in _embeddings().embed([c["text"] for c in chunks[i:i+8]])])
+                store.add_chunks(conn, library_id, ver, chunks, embs)
+            else:
+                # MCP path: FTS-only. Embed chunk 256 token ~1-2s/chunk di ARM
+                # (bge-small quantized) > budget 20s. Vec penuh dari pre-built
+                # CI; hits tetap relevan via BM25+RRF (teruji broadcasting).
+                store.add_chunks(conn, library_id, ver, chunks)
+            conn.execute("UPDATE libs SET full=? WHERE id=?", (1 if complete else 0, library_id))
+            conn.commit()
         hits = store.search(conn, library_id, query, k=10, query_vec=query_vec)
     return store.trim_to_tokens(hits)
 
@@ -164,6 +180,7 @@ def main() -> None:
             print(f"warmup: {name} -> {c['id']} ({n} chunk terindeks)")
         return
     logging.basicConfig(level=logging.WARNING)
+    _embeddings()  # preload model: hindari race lazy-load di request pertama
     mcp.run()
 
 

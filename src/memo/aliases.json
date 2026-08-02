@@ -1,36 +1,212 @@
 {
-  "httpx": {"repo": "encode/httpx", "docs_url": "https://www.python-httpx.org/advanced/clients/", "trust": 95.0, "latest_ver": ""},
-  "requests": {"repo": "psf/requests", "docs_url": "https://requests.readthedocs.io/en/latest/user/advanced/", "trust": 95.0, "latest_ver": ""},
-  "go": {"repo": "golang/go", "docs_url": "https://go.dev/doc/effective_go", "trust": 95.0, "latest_ver": ""},
-  "golang": {"repo": "golang/go", "docs_url": "https://go.dev/doc/effective_go", "trust": 95.0, "latest_ver": ""},
-  "nextjs": {"repo": "vercel/next.js", "docs_url": "https://nextjs.org/docs", "trust": 95.0, "latest_ver": ""},
-  "next": {"repo": "vercel/next.js", "docs_url": "https://nextjs.org/docs", "trust": 95.0, "latest_ver": ""},
-  "dotenv": {"repo": "motdotla/dotenv", "docs_url": "https://github.com/motdotla/dotenv", "trust": 95.0, "latest_ver": ""},
-  "react": {"repo": "facebook/react", "docs_url": "https://react.dev/", "trust": 95.0, "latest_ver": ""},
-  "vue": {"repo": "vuejs/core", "docs_url": "https://vuejs.org/guide/", "trust": 95.0, "latest_ver": ""},
-  "svelte": {"repo": "sveltejs/svelte", "docs_url": "https://svelte.dev/docs", "trust": 95.0, "latest_ver": ""},
-  "angular": {"repo": "angular/angular", "docs_url": "https://angular.dev/", "trust": 95.0, "latest_ver": ""},
-  "tailwind": {"repo": "tailwindlabs/tailwindcss", "docs_url": "https://tailwindcss.com/docs", "trust": 95.0, "latest_ver": ""},
-  "django": {"repo": "django/django", "docs_url": "https://docs.djangoproject.com/", "trust": 95.0, "latest_ver": ""},
-  "numpy": {"repo": "numpy/numpy", "docs_url": "https://numpy.org/doc/stable/", "trust": 95.0, "latest_ver": ""},
-  "pandas": {"repo": "pandas-dev/pandas", "docs_url": "https://pandas.pydata.org/docs/user_guide/io.html", "trust": 95.0, "latest_ver": ""},
-  "fastapi": {"repo": "fastapi/fastapi", "docs_url": "https://fastapi.tiangolo.com/reference/dependencies/", "trust": 95.0, "latest_ver": ""},
-  "pytest": {"repo": "pytest-dev/pytest", "docs_url": "https://docs.pytest.org/", "trust": 95.0, "latest_ver": ""},
-  "redis": {"repo": "redis/redis", "docs_url": "https://redis.io/docs/latest/", "trust": 95.0, "latest_ver": ""},
-  "typescript": {"repo": "microsoft/TypeScript", "docs_url": "https://www.typescriptlang.org/docs/", "trust": 95.0, "latest_ver": ""},
-  "jest": {"repo": "jestjs/jest", "docs_url": "https://jestjs.io/docs/", "trust": 95.0, "latest_ver": ""},
-  "mocha": {"repo": "mochajs/mocha", "docs_url": "https://mochajs.org/", "trust": 95.0, "latest_ver": ""},
-  "axios": {"repo": "axios/axios", "docs_url": "https://axios-http.com/", "trust": 95.0, "latest_ver": ""},
-  "moment": {"repo": "moment/moment", "docs_url": "https://momentjs.com/docs/", "trust": 95.0, "latest_ver": ""},
-  "lodash": {"repo": "lodash/lodash", "docs_url": "https://lodash.com/docs", "trust": 95.0, "latest_ver": ""},
-  "rxjs": {"repo": "ReactiveX/rxjs", "docs_url": "https://rxjs.dev/", "trust": 95.0, "latest_ver": ""},
-  "tensorflow": {"repo": "tensorflow/tensorflow", "docs_url": "https://www.tensorflow.org/api_docs", "trust": 95.0, "latest_ver": ""},
-  "torch": {"repo": "pytorch/pytorch", "docs_url": "https://pytorch.org/docs/stable/", "trust": 95.0, "latest_ver": ""},
-  "pytorch": {"repo": "pytorch/pytorch", "docs_url": "https://pytorch.org/docs/stable/", "trust": 95.0, "latest_ver": ""},
-  "scikit-learn": {"repo": "scikit-learn/scikit-learn", "docs_url": "https://scikit-learn.org/stable/", "trust": 95.0, "latest_ver": ""},
-  "matplotlib": {"repo": "matplotlib/matplotlib", "docs_url": "https://matplotlib.org/stable/", "trust": 95.0, "latest_ver": ""},
-  "bs4": {"repo": "beautifulsoup", "docs_url": "https://www.crummy.com/software/BeautifulSoup/bs4/doc/", "trust": 95.0, "latest_ver": ""},
-  "jquery": {"repo": "jquery/jquery", "docs_url": "https://jquery.com/", "trust": 95.0, "latest_ver": ""},
-  "laravel": {"repo": "laravel/framework", "docs_url": "https://laravel.com/docs", "trust": 95.0, "latest_ver": ""},
-  "spring": {"repo": "spring-projects/spring-framework", "docs_url": "https://docs.spring.io/spring-framework/", "trust": 95.0, "latest_ver": ""}
+ "angular": {
+  "repo": "angular/angular",
+  "docs_url": "https://angular.dev/",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "axios": {
+  "repo": "axios/axios",
+  "docs_url": "https://axios-http.com/",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "bs4": {
+  "repo": "beautifulsoup",
+  "docs_url": "https://www.crummy.com/software/BeautifulSoup/bs4/doc/",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "django": {
+  "repo": "django/django",
+  "docs_url": "https://docs.djangoproject.com/",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "dotenv": {
+  "repo": "motdotla/dotenv",
+  "docs_url": "https://github.com/motdotla/dotenv",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "fastapi": {
+  "repo": "fastapi/fastapi",
+  "docs_url": "https://fastapi.tiangolo.com/reference/dependencies/",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "fastmcp": {
+  "repo": "PrefectHQ/fastmcp",
+  "docs_url": "https://jlowin.github.io/fastmcp/",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "go": {
+  "repo": "golang/go",
+  "docs_url": "https://go.dev/doc/effective_go",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "golang": {
+  "repo": "golang/go",
+  "docs_url": "https://go.dev/doc/effective_go",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "httpx": {
+  "repo": "encode/httpx",
+  "docs_url": "https://www.python-httpx.org/advanced/clients/",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "jest": {
+  "repo": "jestjs/jest",
+  "docs_url": "https://jestjs.io/docs/",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "jquery": {
+  "repo": "jquery/jquery",
+  "docs_url": "https://jquery.com/",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "laravel": {
+  "repo": "laravel/framework",
+  "docs_url": "https://laravel.com/docs",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "lodash": {
+  "repo": "lodash/lodash",
+  "docs_url": "https://lodash.com/docs",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "matplotlib": {
+  "repo": "matplotlib/matplotlib",
+  "docs_url": "https://matplotlib.org/stable/",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "mocha": {
+  "repo": "mochajs/mocha",
+  "docs_url": "https://mochajs.org/",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "moment": {
+  "repo": "moment/moment",
+  "docs_url": "https://momentjs.com/docs/",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "next": {
+  "repo": "vercel/next.js",
+  "docs_url": "https://nextjs.org/docs",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "nextjs": {
+  "repo": "vercel/next.js",
+  "docs_url": "https://nextjs.org/docs",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "numpy": {
+  "repo": "numpy/numpy",
+  "docs_url": "https://numpy.org/doc/stable/",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "pandas": {
+  "repo": "pandas-dev/pandas",
+  "docs_url": "https://pandas.pydata.org/docs/user_guide/io.html",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "pytest": {
+  "repo": "pytest-dev/pytest",
+  "docs_url": "https://docs.pytest.org/",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "pytorch": {
+  "repo": "pytorch/pytorch",
+  "docs_url": "https://pytorch.org/docs/stable/",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "react": {
+  "repo": "facebook/react",
+  "docs_url": "https://react.dev/",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "redis": {
+  "repo": "redis/redis",
+  "docs_url": "https://redis.io/docs/latest/",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "requests": {
+  "repo": "psf/requests",
+  "docs_url": "https://requests.readthedocs.io/en/latest/user/advanced/",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "rxjs": {
+  "repo": "ReactiveX/rxjs",
+  "docs_url": "https://rxjs.dev/",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "scikit-learn": {
+  "repo": "scikit-learn/scikit-learn",
+  "docs_url": "https://scikit-learn.org/stable/",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "spring": {
+  "repo": "spring-projects/spring-framework",
+  "docs_url": "https://docs.spring.io/spring-framework/",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "svelte": {
+  "repo": "sveltejs/svelte",
+  "docs_url": "https://svelte.dev/docs",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "tailwind": {
+  "repo": "tailwindlabs/tailwindcss",
+  "docs_url": "https://tailwindcss.com/docs",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "tensorflow": {
+  "repo": "tensorflow/tensorflow",
+  "docs_url": "https://www.tensorflow.org/api_docs",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "torch": {
+  "repo": "pytorch/pytorch",
+  "docs_url": "https://pytorch.org/docs/stable/",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "typescript": {
+  "repo": "microsoft/TypeScript",
+  "docs_url": "https://www.typescriptlang.org/docs/",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "vue": {
+  "repo": "vuejs/core",
+  "docs_url": "https://vuejs.org/guide/",
+  "trust": 95.0,
+  "latest_ver": ""
+ }
 }

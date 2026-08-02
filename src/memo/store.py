@@ -24,7 +24,7 @@ MAX_TOKENS = 3000  # cap context sent to model
 def connect(db_path: str | None = None) -> sqlite3.Connection:
     path = Path(db_path or DEFAULT_DB)
     path.parent.mkdir(parents=True, exist_ok=True)  # fresh install / CI: dir belum ada
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, timeout=30)  # anti SQLITE_BUSY saat tulis paralel
     conn.enable_load_extension(True)
     sqlite_vec.load(conn)
     conn.execute("PRAGMA journal_mode=WAL")
@@ -83,13 +83,21 @@ def drop_lib(conn: sqlite3.Connection, lib_id: str) -> None:
     conn.commit()
 
 
-def add_chunks(conn: sqlite3.Connection, lib_id: str, ver: str, chunks: list[dict], embeddings: list[list[float]]) -> None:
-    """chunks: [{path, title, text}]; embeddings aligned with chunks (384-dim)."""
-    assert len(chunks) == len(embeddings), "chunks/embeddings length mismatch"
-    conn.execute("DELETE FROM chunks WHERE lib_id=? AND ver=?", (lib_id, ver))
-    conn.execute("DELETE FROM chunks_fts WHERE lib_id=?", (lib_id,))
-    conn.execute("DELETE FROM chunks_vec WHERE lib_id=?", (lib_id,))
-    for ch, emb in zip(chunks, embeddings):
+def add_chunks(conn: sqlite3.Connection, lib_id: str, ver: str, chunks: list[dict], embeddings: list[list[float] | None] | None = None) -> None:
+    """chunks: [{path, title, text}]; embeddings aligned with chunks (384-dim).
+    UPSERT per path: partial re-ingest (deadline) menambah, tidak menghapus
+    chunk lama yang di-skip (existing). embeddings[i]=None -> FTS-only (chunk
+    tetap tersimpan + searchable; vec lama utk path itu dihapus, chunk lain
+    yang tak disentuh mempertahankan vec-nya)."""
+    assert embeddings is None or len(chunks) == len(embeddings), "chunks/embeddings length mismatch"
+    for i, ch in enumerate(chunks):
+        old = conn.execute(
+            "SELECT id FROM chunks WHERE lib_id=? AND path=?", (lib_id, ch["path"])
+        ).fetchall()
+        for (oid,) in old:  # ganti versi lama utk path yang sama saja
+            conn.execute("DELETE FROM chunks_fts WHERE rowid=?", (oid,))
+            conn.execute("DELETE FROM chunks_vec WHERE rowid=?", (oid,))
+            conn.execute("DELETE FROM chunks WHERE id=?", (oid,))
         cur = conn.execute(
             "INSERT INTO chunks (lib_id, ver, path, title, text, fetched_at) "
             "VALUES (?,?,?,?,?,datetime('now'))",
@@ -100,52 +108,58 @@ def add_chunks(conn: sqlite3.Connection, lib_id: str, ver: str, chunks: list[dic
             "INSERT INTO chunks_fts (rowid, lib_id, text) VALUES (?,?,?)",
             (cid, lib_id, ch["text"]),
         )
-        conn.execute(
-            "INSERT INTO chunks_vec (rowid, lib_id, embedding) VALUES (?,?,?)",
-            (cid, lib_id, json.dumps(emb)),
-        )
+        if embeddings and embeddings[i] is not None:
+            conn.execute(
+                "INSERT INTO chunks_vec (rowid, lib_id, embedding) VALUES (?,?,?)",
+                (cid, lib_id, json.dumps(embeddings[i])),
+            )
     conn.commit()
 
 
 # --- read -----------------------------------------------------------------
 
 def search(conn: sqlite3.Connection, lib_id: str, query: str, k: int = 5, query_vec: list[float] | None = None) -> list[dict]:
-    """Hybrid: BM25 always; vector when query_vec given. Rank fusion = score sum.
-    FTS5 MATCH dirusak karakter khusus ('.', '(', ':') — quote tiap kata."""
-    fts = " ".join(f'"{t}"' for t in re.findall(r"[A-Za-z0-9_]+", query))
-    bm = {}
-    if fts:
-        bm = {
-            r[0]: 1.0 - 1.0 / (1.0 + r[1])  # normalize BM25 ~[0,1)
-            for r in conn.execute(
-                "SELECT rowid, bm25(chunks_fts) FROM chunks_fts "
-                "WHERE lib_id=? AND chunks_fts MATCH ? ORDER BY rank LIMIT 20",
-                (lib_id, fts),
-            ).fetchall()
-        }
-    vec = {}
+    """Hybrid: FTS5 BM25 + vector via RRF (reciprocal rank fusion, k=60).
+    AND dulu utk presisi; OR fallback utk recall (benchmark: numpy 0 hasil
+    pd AND — banyak docs pakai istilah berbeda utk konsep sama)."""
+    fts_terms = re.findall(r"[A-Za-z0-9_]+", query)
+    if not fts_terms:
+        fts_and = fts_or = ""
+    else:
+        quoted = " ".join(f'"{t}"' for t in fts_terms)
+        fts_and, fts_or = quoted, " OR ".join(f'"{t}"' for t in fts_terms)
+    ranked = []  # ordered rowids: union FTS(and->or) + vec, di-RRF
+    if fts_and:
+        ranked.extend(_fts_ranks(conn, lib_id, fts_and))
     if query_vec is not None:
-        for r in conn.execute(
-            "SELECT rowid, distance FROM chunks_vec WHERE "
-            "lib_id=? AND embedding MATCH ? AND k=?",
+        ranked.extend(r[0] for r in conn.execute(
+            "SELECT rowid FROM chunks_vec WHERE lib_id=? AND embedding MATCH ? AND k=?",
             (lib_id, json.dumps(query_vec), 20),
-        ).fetchall():
-            vec[r[0]] = 1.0 - r[1] / 2.0  # cosine distance -> similarity
-    fused = {}
-    for cid, s in bm.items():
-        fused[cid] = fused.get(cid, 0.0) + s
-    for cid, s in vec.items():
-        fused[cid] = fused.get(cid, 0.0) + s
-    if not fused:
-        return []
-    ranked = sorted(fused.items(), key=lambda kv: kv[1], reverse=True)[:k]
+        ).fetchall())
+    if not ranked:
+        if fts_or and fts_or != fts_and:
+            ranked = _fts_ranks(conn, lib_id, fts_or)  # OR: recall terakhir
+        if not ranked:
+            return []
+    fused: dict[int, float] = {}
+    for cid in ranked:
+        fused[cid] = fused.get(cid, 0.0) + 1.0 / (60 + len(fused))  # RRF: rank urut
+    top = [cid for cid, _ in sorted(fused.items(), key=lambda kv: kv[1], reverse=True)[:k]]
     rows = conn.execute(
-        f"SELECT id, path, title, text FROM chunks WHERE id IN ({','.join('?'*len(ranked))})",
-        [cid for cid, _ in ranked],
+        f"SELECT id, path, title, text FROM chunks WHERE id IN ({','.join('?'*len(top))})",
+        top,
     ).fetchall()
     byid = {r[0]: r for r in rows}
     return [{"id": cid, "path": byid[cid][1], "title": byid[cid][2], "text": byid[cid][3]}
-            for cid, _ in ranked if cid in byid]
+            for cid in top if cid in byid]
+
+
+def _fts_ranks(conn: sqlite3.Connection, lib_id: str, fts_query: str, limit: int = 20) -> list[int]:
+    """Rowid ordered by BM25 (best first)."""
+    return [r[0] for r in conn.execute(
+        "SELECT rowid FROM chunks_fts WHERE lib_id=? AND chunks_fts MATCH ? ORDER BY rank LIMIT ?",
+        (lib_id, fts_query, limit),
+    ).fetchall()]
 
 
 def get_lib(conn: sqlite3.Connection, lib_id: str) -> dict | None:

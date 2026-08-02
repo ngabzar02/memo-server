@@ -36,8 +36,14 @@ def init(conn: sqlite3.Connection) -> None:
     conn.execute(
         """CREATE TABLE IF NOT EXISTS libs (
             id TEXT PRIMARY KEY, name TEXT, repo TEXT, docs_url TEXT,
-            trust REAL, latest_ver TEXT, versions TEXT)"""
+            trust REAL, latest_ver TEXT, versions TEXT
+        )"""
     )
+    try:  # migrasi: kolom full (1 = ingest lengkap, 0 = parsial/deadline tercapai)
+        conn.execute("ALTER TABLE libs ADD COLUMN full INTEGER DEFAULT 1")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # kolom sudah ada
     conn.execute(
         """CREATE TABLE IF NOT EXISTS chunks (
             id INTEGER PRIMARY KEY AUTOINCREMENT, lib_id TEXT, ver TEXT,
@@ -144,7 +150,10 @@ def search(conn: sqlite3.Connection, lib_id: str, query: str, k: int = 5, query_
 
 def get_lib(conn: sqlite3.Connection, lib_id: str) -> dict | None:
     r = conn.execute("SELECT * FROM libs WHERE id=?", (lib_id,)).fetchone()
-    return dict(zip(["id", "name", "repo", "docs_url", "trust", "latest_ver", "versions"], r)) if r else None
+    if not r:
+        return None
+    cols = ["id", "name", "repo", "docs_url", "trust", "latest_ver", "versions", "full"]
+    return dict(zip(cols, r))
 
 
 def get_versions(conn: sqlite3.Connection, lib_id: str) -> list[str]:

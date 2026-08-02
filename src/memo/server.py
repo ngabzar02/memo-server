@@ -8,6 +8,7 @@ import logging
 import sqlite3
 import sys
 import threading
+import time
 from typing import Any
 
 from fastmcp import FastMCP
@@ -44,10 +45,18 @@ def get_docs(library_id: str, query: str, version: str | None = None) -> list[di
     """Get relevant documentation chunks for a library and query.
     Cache hit: sub-ms. Cache miss: fetch+ingest+index once (~5-60s first time)."""
     with _INGEST_LOCK:  # cold ingest/embed serial: crash paralel = fatal
-        return _get_docs(library_id, query, version)
+        return _get_docs(library_id, query, version,
+                         deadline=time.monotonic() + _REQUEST_BUDGET)
 
 
-def _get_docs(library_id: str, query: str, version: str | None = None) -> list[dict[str, Any]]:
+# batas waktu request MCP: client timeout ~30s lalu disconnect -> proses keluar.
+# deadline 22s menjamin request selesai sebelum timeout; sisa ingest dilanjutkan
+# di call berikutnya (flag full=0 -> re-ingest parsial).
+_REQUEST_BUDGET = 22.0
+
+
+def _get_docs(library_id: str, query: str, version: str | None = None,
+              deadline: float | None = None) -> list[dict[str, Any]]:
     conn = store.connect()
     lib = store.get_lib(conn, library_id)
     if lib and not version and len(store.get_versions(conn, library_id)) <= 1:
@@ -60,6 +69,7 @@ def _get_docs(library_id: str, query: str, version: str | None = None) -> list[d
     has_chunks = lib is not None and conn.execute(
         "SELECT COUNT(*) FROM chunks WHERE lib_id=?", (library_id,)
     ).fetchone()[0] > 0
+    full = (lib or {}).get("full", 1)
     if not lib:
         cands = registry.resolve(library_id, query)
         if not cands:
@@ -72,18 +82,25 @@ def _get_docs(library_id: str, query: str, version: str | None = None) -> list[d
     vec = _embeddings().embed([query])
     query_vec = [float(x) for x in list(vec)[0]]  # numpy float32 -> float, utk json.dumps
     hits = store.search(conn, library_id, query, k=10, query_vec=query_vec)
-    if not has_chunks:
-        # lib baru / ingest pernah timeout: fetch+index sekali. hits kosong pd
-        # lib ber-chunk TIDAK memicu re-ingest (query mungkin memang tak cocok).
-        chunks = ingest.ingest_lib(lib.get("docs_url") or f"https://{lib.get('repo','')}")
+    if not has_chunks or (not version and not full):
+        # lib baru / ingest parsial (deadline tercapai sebelumnya): fetch+index
+        # lanjutan. hits kosong pd lib lengkap TIDAK memicu re-ingest.
+        chunks, complete = ingest.ingest_lib(
+            lib.get("docs_url") or f"https://{lib.get('repo','')}", deadline=deadline)
         if not chunks:
             return []
         chunks = chunks[:200]  # cap: 200 embed ~2 menit di ARM; cukup utk top docs
         embs = []
         for i in range(0, len(chunks), 64):  # batch embed: spike RAM kecil
+            if deadline and time.monotonic() > deadline:
+                chunks = chunks[:len(embs)]
+                complete = False
+                break
             embs.extend(_embeddings().embed([c["text"] for c in chunks[i:i+64]]))
-        store.add_chunks(conn, library_id, ver, chunks,
+        store.add_chunks(conn, library_id, ver, chunks[:len(embs)],
                          [[float(x) for x in e] for e in embs])
+        conn.execute("UPDATE libs SET full=? WHERE id=?", (1 if complete else 0, library_id))
+        conn.commit()
         hits = store.search(conn, library_id, query, k=10, query_vec=query_vec)
     return store.trim_to_tokens(hits)
 
@@ -138,7 +155,7 @@ def main() -> None:
             if force:
                 store.drop_lib(store.connect(), c["id"])
             try:
-                get_docs(c["id"], "overview usage documentation")
+                _get_docs(c["id"], "overview usage documentation")  # tanpa budget: CLI
             except Exception as e:  # noqa: BLE001 — satu library gagal, lanjut
                 print(f"warmup: {name} -> GAGAL: {str(e)[:120]}", file=sys.stderr)
                 continue

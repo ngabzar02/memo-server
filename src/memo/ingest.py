@@ -92,33 +92,36 @@ def _gh_raw(docs_url: str) -> list[dict] | None:
     return None
 
 
-def ingest_lib(docs_url: str) -> list[dict]:
+def ingest_lib(docs_url: str, deadline: float | None = None) -> tuple[list[dict], bool]:
     """docs_url + /llms-full.txt -> try llms-full, else llms, else single page.
-    ponytail: serial fetch, global time budget ~60s (40 pages x 20s would hang)."""
+    Returns (chunks, complete). complete=False bila deadline tercapai -> server
+    menyimpan parsial dan melanjutkan di call berikutnya.
+    ponytail: serial fetch; deadline None = tak terbatas (warmup)."""
     base = docs_url.rstrip("/")
-    deadline = time.monotonic() + 60
+    if deadline is None:
+        deadline = time.monotonic() + 60
     for candidate in (f"{base}/llms-full.txt", f"{base}/llms.txt"):
         text = fetch_text(candidate)
         if not text:
             continue
         pages = parse_llms(text)
         if not pages:
-            return ingest_docs(candidate)
+            return ingest_docs(candidate), True
         out = []
         for p in pages:
             if time.monotonic() > deadline:
-                break
+                return out, False
             chunks = ingest_docs(p["url"])
             for c in chunks:
                 c["path"] = f"{p['title']} ({p['url']})"
             out.extend(chunks)
             if len(out) > 300:  # cap chunks per library
-                break
-        return out
+                return out, True
+        return out, True
     raw = _gh_raw(base)
     if raw is not None:
-        return raw
-    return ingest_docs(base)
+        return raw, True
+    return ingest_docs(base), True
 
 
 def _demo() -> None:

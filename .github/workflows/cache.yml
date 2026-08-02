@@ -55,5 +55,3 @@ jobs:
           gh release create cache-latest "$HOME/.local/share/memo/docs.db" \
             --title "memo cache" \
             --notes "Pre-built docs.db ($(date -u +%Y-%m-%dT%H:%MZ)). Download: https://github.com/ngabzar02/memo-server/releases/latest/download/docs.db"
-      - name: Trigger bench
-        run: gh workflow run bench.yml

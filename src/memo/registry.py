@@ -121,11 +121,12 @@ def _pypi(name: str) -> dict | None:
         r = httpx.get(f"https://pypi.org/pypi/{name}/json", timeout=10)
         if r.status_code != 200:
             return None
-        d = r.json()["info"]
-        urls = d.get("project_urls") or {}
-        repo = urls.get("Source", "") or d.get("home_page", "") or ""
+        d = r.json()  # releases ada di top-level, bukan di "info"
+        info = d["info"]
+        urls = info.get("project_urls") or {}
+        repo = urls.get("Source", "") or info.get("home_page", "") or ""
         m = re.search(r"github.com[/:]([\w.-]+/[\w.-]+)", repo)
-        return {"repo": m.group(1) if m else "", "latest_ver": d.get("version", ""),
+        return {"repo": m.group(1) if m else "", "latest_ver": info.get("version", ""),
                 "trust": 0.0,  # PyPI JSON API tanpa download count; trust dari GitHub/npm
                 "docs_url": "",
                 "versions": list(d.get("releases", {}).keys())[-20:]}
@@ -134,16 +135,18 @@ def _pypi(name: str) -> dict | None:
 
 
 def versions_of(name: str) -> list[str]:
-    """Riwayat versi langsung dari npm/PyPI (alias/builtin tanpa versi sendiri)."""
-    vs: list[str] = []
+    """Riwayat versi langsung dari npm/PyPI (alias/builtin tanpa versi sendiri).
+    Pilih sumber dgn versi TERBANYAK: npm 'fastapi' (8 versi kuno) kalah dari
+    PyPI fastapi resmi (100+); npm express (207) menang atas pypi express."""
+    best: list[str] = []
     for fn in (_npm, _pypi):
         try:
             hit = fn(name)
-            if hit and hit.get("versions"):
-                vs.extend(hit["versions"])
+            if hit and hit.get("versions") and len(hit["versions"]) > len(best):
+                best = hit["versions"]
         except Exception:  # noqa: BLE001
             continue
-    return list(dict.fromkeys(vs))  # unik, urutan pertemuan
+    return best
 
 
 def _norm(s: str) -> str:

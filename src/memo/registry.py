@@ -76,18 +76,11 @@ def _clean_id(name: str) -> str:
 def version_etag(name: str, old_etag: str = "") -> tuple[str, str, list[str]]:
     """Cek versi terbaru + riwayat dgn conditional GET (ETag 304 = tidak berubah).
     Returns (latest_ver, etag_baru, versions). TTL dipegang server via last_check.
-    Ekosistem tanpa ETag (crates/go): selalu fetch penuh — hemat membandingkan
-    max_version. ponytail: cukup sumber terbaik (pypi/npm/crates) utk version
-    refresh; docs freshness terpisah."""
-    for fn in (_npm, _pypi, _crates, _go):
-        try:
-            hit = fn(name)
-            if not hit or not hit.get("latest_ver"):
-                continue
-            vs = hit.get("versions") or []
-            return hit["latest_ver"], "", vs[:20]
-        except Exception:  # noqa: BLE001
-            continue
+    Pilih sumber versi TERBANYAK (versions_of): npm 'flask' (1 versi kuno) kalah
+    dari PyPI flask resmi (100+) — mencegah versi npm-junk menimpa versi asli."""
+    vs = versions_of(name)
+    if vs:
+        return vs[0], "", vs[:20]
     return "", old_etag, []
 
 
@@ -300,8 +293,14 @@ def _gh_search(name: str, query: str = "") -> dict | None:
         return None
 
 
-def _norm_url(docs_url: str) -> str:
-    return docs_url.rstrip("/")
+def _norm_url(docs_url: str | None) -> str:
+    return (docs_url or "").rstrip("/")
+
+
+def _is_gh_url(u: str) -> bool:
+    """True utk github page/README raw — docs_url ini TIDAK dipakai utk crawl."""
+    return u.startswith(("https://github.com/", "http://github.com/",
+                         "https://raw.githubusercontent.com/"))
 
 
 _CACHE_TTL = 3600  # 1 jam: resolve mahal (6 sumber jaringan); hit ~0ms
@@ -426,7 +425,13 @@ def _resolve(name: str, query: str = "") -> list[dict]:
         if key in seen:
             cur = out[seen[key]]
             for k, v in c.items():  # merge missing info (e.g. latest_ver from PyPI)
-                if (not cur.get(k)) or (k == "versions" and cur.get(k) in ("[]", "")) and v:
+                if not v:
+                    continue
+                if k == "docs_url":
+                    # docs resmi (bukan github page) MENANG atas github README
+                    if not cur.get(k) or (_is_gh_url(cur[k]) and not _is_gh_url(v)):
+                        cur[k] = v
+                elif (not cur.get(k)) or (k == "versions" and cur.get(k) in ("[]", "")):
                     cur[k] = v
             continue
         seen[key] = len(out)

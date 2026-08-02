@@ -5,6 +5,7 @@ Usage: memo  (stdio MCP server, registered via uv tool install)
 
 import json
 import logging
+import os
 import sqlite3
 import sys
 import threading
@@ -17,6 +18,19 @@ from memo import ingest, registry, store
 
 log = logging.getLogger("memo")
 mcp = FastMCP("memo")
+
+# activity log JSONL: dasar pemantauan benchmark via MCP langsung (BRUTAL.md).
+_ACTIVITY = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "..", "..", "bench", "activity.log")
+
+
+def _log_activity(entry: dict[str, Any]) -> None:
+    """Append JSONL; gagal (permission/disk) tidak menggagalkan request."""
+    try:
+        with open(_ACTIVITY, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError:
+        pass
 
 # ingest embed+sqlite thread-safe (ORT concurrent run TERUJI 6-thread aman);
 # lock per-library hanya mencegah 2 ingest lib sama bersamaan.
@@ -77,7 +91,13 @@ def _rerank(query: str, hits: list[dict[str, Any]], top_n: int = 10) -> list[dic
 def resolve_library_id(library_name: str, query: str = "") -> list[dict[str, Any]]:
     """Resolve a library name (e.g. 'flask', 'nextjs') to candidate library IDs
     with trust scores and latest version. query is optional context to disambiguate."""
-    return registry.resolve(library_name, query)
+    t0 = time.monotonic()
+    out = registry.resolve(library_name, query)
+    _log_activity({"t": time.time(), "tool": "resolve", "name": library_name,
+                   "q": query, "ms": round((time.monotonic() - t0) * 1000),
+                   "top": [{"id": c["id"], "trust": round(c["trust"], 1),
+                            "docs": c.get("docs_url", "")[:60]} for c in out[:3]]})
+    return out
 
 
 @mcp.tool()
@@ -96,6 +116,7 @@ _REQUEST_BUDGET = 20.0
 
 def _get_docs(library_id: str, query: str, version: str | None = None,
               deadline: float | None = None) -> list[dict[str, Any]]:
+    t0 = time.monotonic()
     conn = store.connect()
     lib = store.get_lib(conn, library_id)
     chunk_count = conn.execute(
@@ -154,6 +175,9 @@ def _get_docs(library_id: str, query: str, version: str | None = None,
             conn.commit()
         hits = store.search(conn, library_id, query, k=10, query_vec=query_vec)
     hits = _rerank(query, hits)
+    _log_activity({"t": time.time(), "tool": "get_docs", "lib": library_id,
+                   "q": query, "ver": ver, "ms": round((time.monotonic() - t0) * 1000),
+                   "top": [h["path"] for h in hits[:5]]})
     return store.trim_to_tokens(hits)
 
 
@@ -191,11 +215,11 @@ def _maybe_refresh(conn: sqlite3.Connection, lib: dict) -> bool:
     conn.execute("UPDATE libs SET last_check=datetime('now') WHERE id=?", (lib["id"],))
     conn.commit()
     if latest and latest != lib.get("latest_ver"):
-        old = lib.get("latest_ver")
         conn.execute("UPDATE libs SET latest_ver=?, versions=? WHERE id=?",
                      (latest, json.dumps(vs or []), lib["id"]))
-        if old:
-            conn.execute("DELETE FROM chunks WHERE lib_id=? AND ver=?", (lib["id"], old))
+        # chunks versi lama DIBIARKAN (tetap relevan; re-ingest berikutnya
+        # mengganti per-path). DELETE dulu terbukti merugikan: re-ingest
+        # gagal deadline 20s -> lib jadi 0 chunk.
         conn.commit()
         return True
     return False

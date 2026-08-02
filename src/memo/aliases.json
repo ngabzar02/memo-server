@@ -208,5 +208,17 @@
   "docs_url": "https://vuejs.org/guide/",
   "trust": 95.0,
   "latest_ver": ""
+ },
+ "openai": {
+  "repo": "openai/openai-python",
+  "docs_url": "https://platform.openai.com/docs",
+  "trust": 95.0,
+  "latest_ver": ""
+ },
+ "anthropic": {
+  "repo": "anthropics/anthropic-sdk-python",
+  "docs_url": "https://docs.anthropic.com",
+  "trust": 95.0,
+  "latest_ver": ""
  }
 }

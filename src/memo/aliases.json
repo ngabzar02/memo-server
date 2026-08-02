@@ -13,7 +13,7 @@
   "tailwind": {"repo": "tailwindlabs/tailwindcss", "docs_url": "https://tailwindcss.com/docs", "trust": 95.0, "latest_ver": ""},
   "django": {"repo": "django/django", "docs_url": "https://docs.djangoproject.com/", "trust": 95.0, "latest_ver": ""},
   "numpy": {"repo": "numpy/numpy", "docs_url": "https://numpy.org/doc/stable/", "trust": 95.0, "latest_ver": ""},
-  "pandas": {"repo": "pandas-dev/pandas", "docs_url": "https://pandas.pydata.org/docs/", "trust": 95.0, "latest_ver": ""},
+  "pandas": {"repo": "pandas-dev/pandas", "docs_url": "https://pandas.pydata.org/docs/user_guide/io.html", "trust": 95.0, "latest_ver": ""},
   "fastapi": {"repo": "fastapi/fastapi", "docs_url": "https://fastapi.tiangolo.com/", "trust": 95.0, "latest_ver": ""},
   "pytest": {"repo": "pytest-dev/pytest", "docs_url": "https://docs.pytest.org/", "trust": 95.0, "latest_ver": ""},
   "redis": {"repo": "redis/redis", "docs_url": "https://redis.io/docs/latest/", "trust": 95.0, "latest_ver": ""},

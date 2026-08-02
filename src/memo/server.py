@@ -92,7 +92,11 @@ def main() -> None:
             c = cands[0]
             if force:
                 store.drop_lib(store.connect(), c["id"])
-            get_docs(c["id"], "overview usage documentation")
+            try:
+                get_docs(c["id"], "overview usage documentation")
+            except Exception as e:  # noqa: BLE001 — satu library gagal, lanjut
+                print(f"warmup: {name} -> GAGAL: {str(e)[:120]}", file=sys.stderr)
+                continue
             conn = store.connect()
             n = conn.execute("SELECT COUNT(*) FROM chunks WHERE lib_id=?", (c["id"],)).fetchone()[0]
             print(f"warmup: {name} -> {c['id']} ({n} chunk terindeks)")

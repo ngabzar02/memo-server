@@ -77,6 +77,21 @@ def ingest_docs(url: str) -> list[dict]:
     return [{"path": url, "title": title, "text": c} for c in chunks]
 
 
+def _gh_raw(docs_url: str) -> list[dict] | None:
+    """Halaman GitHub repo -> raw README (halaman JS berat, llms.txt jarang)."""
+    m = re.match(r"https?://github\.com/([\w.-]+/[\w.-]+)", docs_url.rstrip("/"))
+    if not m:
+        return None
+    for branch in ("main", "master"):
+        for fname in ("README.md", "README.rst", "README.txt"):
+            text = fetch_text(f"https://raw.githubusercontent.com/{m.group(1)}/{branch}/{fname}")
+            if text:
+                chunks = chunk_text(text)
+                return [{"path": f"https://raw.githubusercontent.com/{m.group(1)}/{branch}/{fname}",
+                         "title": fname, "text": c} for c in chunks]
+    return None
+
+
 def ingest_lib(docs_url: str) -> list[dict]:
     """docs_url + /llms-full.txt -> try llms-full, else llms, else single page.
     ponytail: serial fetch, global time budget ~60s (40 pages x 20s would hang)."""
@@ -100,6 +115,9 @@ def ingest_lib(docs_url: str) -> list[dict]:
             if len(out) > 300:  # cap chunks per library
                 break
         return out
+    raw = _gh_raw(base)
+    if raw is not None:
+        return raw
     return ingest_docs(base)
 
 

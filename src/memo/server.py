@@ -6,6 +6,7 @@ Usage: memo  (stdio MCP server, registered via uv tool install)
 import json
 import logging
 import sys
+import threading
 from typing import Any
 
 from fastmcp import FastMCP
@@ -14,6 +15,11 @@ from memo import ingest, registry, store
 
 log = logging.getLogger("memo")
 mcp = FastMCP("memo")
+
+# ingest+embed tidak thread-safe (fastembed first-load race -> crash paralel);
+# cache hit sub-ms jadi antrian lock pendek. ponytail: lock global, per-lib
+# lock kalau throughput nyata butuh.
+_INGEST_LOCK = threading.Lock()
 
 
 def _embeddings():
@@ -36,6 +42,11 @@ def resolve_library_id(library_name: str, query: str = "") -> list[dict[str, Any
 def get_docs(library_id: str, query: str, version: str | None = None) -> list[dict[str, Any]]:
     """Get relevant documentation chunks for a library and query.
     Cache hit: sub-ms. Cache miss: fetch+ingest+index once (~5-60s first time)."""
+    with _INGEST_LOCK:  # cold ingest/embed serial: crash paralel = fatal
+        return _get_docs(library_id, query, version)
+
+
+def _get_docs(library_id: str, query: str, version: str | None = None) -> list[dict[str, Any]]:
     conn = store.connect()
     lib = store.get_lib(conn, library_id)
     if not lib:

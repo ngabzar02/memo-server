@@ -108,9 +108,10 @@ def _npm(name: str) -> dict | None:
                            timeout=8).json().get("downloads", 0)
         except (httpx.HTTPError, ValueError):
             pass
+        versions = list(d.get("versions", {}).keys())[-20:]  # history, terakhir dulu
         return {"repo": repo, "latest_ver": latest,
                 "trust": math.log10(max(dl, 1)),  # downloads bulanan npm gratis
-                "docs_url": docs}
+                "docs_url": docs, "versions": versions}
     except (httpx.HTTPError, ValueError):
         return None
 
@@ -126,7 +127,8 @@ def _pypi(name: str) -> dict | None:
         m = re.search(r"github.com[/:]([\w.-]+/[\w.-]+)", repo)
         return {"repo": m.group(1) if m else "", "latest_ver": d.get("version", ""),
                 "trust": 0.0,  # PyPI JSON API tanpa download count; trust dari GitHub/npm
-                "docs_url": ""}
+                "docs_url": "",
+                "versions": list(d.get("releases", {}).keys())[-20:]}
     except (httpx.HTTPError, ValueError, KeyError):
         return None
 
@@ -208,7 +210,7 @@ def resolve(name: str, query: str = "") -> list[dict]:
             "docs_url": _norm_url(hit.get("docs_url", "")),
             "trust": float(hit.get("trust", 0.0)),
             "latest_ver": hit.get("latest_ver", ""),
-            "versions": json.dumps([hit["latest_ver"]] if hit.get("latest_ver") else []),
+            "versions": json.dumps(hit.get("versions") or ([hit["latest_ver"]] if hit.get("latest_ver") else [])),
         })
     # dedupe by repo/docs_url: keep highest trust, merge non-empty fields
     seen, out = {}, []
@@ -225,7 +227,9 @@ def resolve(name: str, query: str = "") -> list[dict]:
             continue
         seen[key] = len(out)
         out.append(c)
-    return out
+    # buang noise: entri tanpa repo & docs_url (PyPI bare: tak bisa dipakai
+    # get_docs) — info versinya sudah ter-merge via dedupe di atas
+    return [c for c in out if c["repo"] or c["docs_url"]]
 
 
 def _demo() -> None:

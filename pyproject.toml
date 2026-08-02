@@ -1,0 +1,22 @@
+[project]
+name = "memo"
+version = "1.0.0"
+description = "Context7 clone: local MCP server for latest library docs (free, unlimited, offline-capable)"
+requires-python = ">=3.10"
+dependencies = [
+    "fastmcp>=2.0",
+    "httpx>=0.27",
+    "trafilatura>=1.8",
+    "sqlite-vec==0.1.9",
+    "fastembed>=0.4",
+]
+
+[project.scripts]
+memo = "memo.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/memo"]

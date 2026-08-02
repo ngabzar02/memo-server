@@ -1,0 +1,34 @@
+{
+  "node": {
+    "assert": "assert.md", "buffer": "buffer.md", "child_process": "child_process.md",
+    "cluster": "cluster.md", "console": "console.md", "crypto": "crypto.md",
+    "dgram": "dgram.md", "dns": "dns.md", "events": "events.md", "fs": "fs.md",
+    "http": "http.md", "http2": "http2.md", "https": "https.md", "net": "net.md",
+    "os": "os.md", "path": "path.md", "perf_hooks": "perf_hooks.md", "process": "process.md",
+    "punycode": "punycode.md", "querystring": "querystring.md", "readline": "readline.md",
+    "repl": "repl.md", "stream": "stream.md", "string_decoder": "string_decoder.md",
+    "timers": "timers.md", "tls": "tls.md", "trace_events": "trace_events.md",
+    "tty": "tty.md", "url": "url.md", "util": "util.md", "v8": "v8.md",
+    "vm": "vm.md", "wasi": "wasi.md", "worker_threads": "worker_threads.md",
+    "zlib": "zlib.md"
+  },
+  "python": {
+    "argparse": "argparse.html", "asyncio": "asyncio.html", "base64": "base64.html",
+    "bisect": "bisect.html", "collections": "collections.html", "concurrent.futures": "concurrent.futures.html",
+    "contextlib": "contextlib.html", "copy": "copy.html", "csv": "csv.html",
+    "dataclasses": "dataclasses.html", "datetime": "datetime.html", "email": "email.html",
+    "enum": "enum.html", "functools": "functools.html", "glob": "glob.html",
+    "hashlib": "hashlib.html", "heapq": "heapq.html", "hmac": "hmac.html",
+    "html": "html.html", "http.server": "http.server.html", "itertools": "itertools.html",
+    "json": "json.html", "logging": "logging.html", "math": "math.html",
+    "multiprocessing": "multiprocessing.html", "os": "os.html", "pathlib": "pathlib.html",
+    "pprint": "pprint.html", "queue": "queue.html", "random": "random.html",
+    "re": "re.html", "shutil": "shutil.html", "socket": "socket.html",
+    "sqlite3": "sqlite3.html", "statistics": "statistics.html", "string": "string.html",
+    "struct": "struct.html", "subprocess": "subprocess.html", "sys": "sys.html",
+    "tempfile": "tempfile.html", "textwrap": "textwrap.html", "threading": "threading.html",
+    "time": "time.html", "traceback": "traceback.html", "typing": "typing.html",
+    "urllib": "urllib.html", "uuid": "uuid.html", "warnings": "warnings.html",
+    "xml": "xml.html", "zipfile": "zipfile.html"
+  }
+}

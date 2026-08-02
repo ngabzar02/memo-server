@@ -269,7 +269,6 @@ def main() -> None:
             print(f"warmup: {name} -> {c['id']} ({n} chunk terindeks)")
         return
     logging.basicConfig(level=logging.WARNING)
-    _embeddings()  # preload model: hindari race lazy-load di request pertama
     mcp.run()
 
 

@@ -1,5 +1,8 @@
 docs.db
 *.db-wal
 *.db-shm
+*.bak-shm
+*.bak-wal
 __pycache__/
 *.pyc
+bench/activity.log

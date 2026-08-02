@@ -7,8 +7,6 @@ Jika model gagal download/load -> rerank nonaktif (caller fallback).
 import os
 import urllib.request
 
-import numpy as np
-from onnxruntime import InferenceSession
 from tokenizers import BertWordPieceTokenizer
 
 MODEL_ID = "temsa/ms-marco-MiniLM-L-6-v2-onnx-cpu-qint8"
@@ -40,10 +38,13 @@ class CrossReranker:
     """Rerank (query, doc) pairs -> skor relevansi (logit positif)."""
 
     def __init__(self, threads: int = 2):
-        so = __import__("onnxruntime").SessionOptions()
+        import numpy as np  # lazy: numpy import ~1s, server start harus cepat
+        import onnxruntime  # lazy: import ORT ~1-2s
+        self._np = np
+        so = onnxruntime.SessionOptions()
         so.intra_op_num_threads = threads
         so.inter_op_num_threads = 1
-        self.session = InferenceSession(
+        self.session = onnxruntime.InferenceSession(
             _ensure_model(), so, providers=["CPUExecutionProvider"])
         self.tok = BertWordPieceTokenizer(_path("vocab.txt"))
         self.tok.enable_truncation(max_length=MAX_LEN)
@@ -58,8 +59,8 @@ class CrossReranker:
             seg.append(enc.type_ids + [0] * (MAX_LEN - n))
         out = self.session.run(
             None,
-            {"input_ids": np.array(ids, dtype=np.int64),
-             "attention_mask": np.array(mask, dtype=np.int64),
-             "token_type_ids": np.array(seg, dtype=np.int64)},
+            {"input_ids": self._np.array(ids, dtype=self._np.int64),
+             "attention_mask": self._np.array(mask, dtype=self._np.int64),
+             "token_type_ids": self._np.array(seg, dtype=self._np.int64)},
         )[0]  # (N,1): single relevance logit
         return [float(logits[0]) for logits in out]

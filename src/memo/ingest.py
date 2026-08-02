@@ -7,10 +7,21 @@ import re
 import time
 
 import httpx
-import trafilatura
 
 CHUNK_TOKENS = 256
 OVERLAP_TOKENS = 50
+
+_trafilatura = None
+
+
+def _extract(text: str) -> str:
+    """Lazy import trafilatura (~1s) — server start harus cepat utk MCP
+    handshake 30s (ARM contention saat 2 server start bersamaan)."""
+    global _trafilatura
+    if _trafilatura is None:
+        import trafilatura
+        _trafilatura = trafilatura
+    return _trafilatura.extract(text, include_comments=False) or ""
 
 
 def fetch_text(url: str, timeout: int = 20) -> str | None:
@@ -20,7 +31,7 @@ def fetch_text(url: str, timeout: int = 20) -> str | None:
         if r.status_code != 200:
             return None
         if "text/html" in r.headers.get("content-type", "") or r.text.strip().startswith("<"):
-            return trafilatura.extract(r.text, include_comments=False) or ""
+            return _extract(r.text)
         return r.text  # plain text (llms.txt / llms-full.txt)
     except httpx.HTTPError:
         return None
@@ -116,7 +127,7 @@ def _crawl(start_url: str, deadline: float, existing: set[str] | None = None,
             return None, ""
         if r.status_code != 200:
             return None, ""
-        text = trafilatura.extract(r.text, include_comments=False) or ""
+        text = _extract(r.text) or ""
         return text, r.text  # text utk chunk, html mentah utk link BFS
 
     def prio(u: str) -> int:
@@ -131,12 +142,16 @@ def _crawl(start_url: str, deadline: float, existing: set[str] | None = None,
         return 2
 
     seen, out, queue = set(), [], [base]
+    existing = existing or set()
     with ThreadPoolExecutor(max_workers=4) as ex:
         while queue and time.monotonic() < deadline and len(out) < 200:
-            # ambil batch URL prioritas tertinggi, fetch paralel
+            # ambil batch URL prioritas tertinggi, fetch paralel.
+            # ponytail: URL existing TETAP di-fetch (link extraction tetap jalan,
+            # tiap call mengeksplorasi 1 tingkat baru — iterative deepening);
+            # chunk-nya di-skip supaya tidak duplikat path.
             batch, frontier = [], []
             for url in sorted(queue, key=prio):  # prio 0 dulu (ascending)
-                if url in seen or (existing and url in existing):
+                if url in seen:
                     continue
                 if len(batch) >= 4:
                     break
@@ -148,11 +163,12 @@ def _crawl(start_url: str, deadline: float, existing: set[str] | None = None,
             for url, (text, html) in zip(batch, ex.map(page, batch)):
                 if not text:
                     continue
-                title = re.sub(r"^#+\s*", "", text.splitlines()[0])[:80] if text.splitlines() else url
-                for c in chunk_text(text):
-                    out.append({"path": url, "title": title, "text": c})
-                if len(out) >= 200:
-                    break
+                if url not in existing:
+                    title = re.sub(r"^#+\s*", "", text.splitlines()[0])[:80] if text.splitlines() else url
+                    for c in chunk_text(text):
+                        out.append({"path": url, "title": title, "text": c})
+                    if len(out) >= 200:
+                        break
                 # link internal; relatif ke HALAMAN INI (bukan base) -> path benar
                 nxt = []
                 for href in re.findall(r'href="([^"#?]+)', html):

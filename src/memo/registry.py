@@ -58,7 +58,9 @@ def _read_gh_token() -> str:
         return ""
 
 
-GH_TOKEN = os.environ.get("SEARCH_MCP_GITHUB_TOKEN") or _read_gh_token()
+GH_TOKEN = (os.environ.get("GITHUB_TOKEN")           # GitHub Actions runner
+            or os.environ.get("SEARCH_MCP_GITHUB_TOKEN")
+            or _read_gh_token())
 
 
 def _gh_headers() -> dict:

@@ -8,6 +8,9 @@ on:
       - "pyproject.toml"
   workflow_dispatch:
 
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+
 jobs:
   bench:
     runs-on: ubuntu-latest
@@ -16,8 +19,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
       - name: Install
         run: pip install --quiet .
+      - name: Selfcheck (smoke test modul)
+        run: |
+          python -m memo.ingest
+          python -m memo.registry
+          python -m memo.store
       - name: Run bench (20 query vs Context7)
         run: python bench/bench.py
       - uses: actions/upload-artifact@v4

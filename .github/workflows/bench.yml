@@ -1,0 +1,27 @@
+name: bench
+
+on:
+  push:
+    paths:
+      - "src/**"
+      - "bench/**"
+      - "pyproject.toml"
+  workflow_dispatch:
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: pip install --quiet .
+      - name: Run bench (20 query vs Context7)
+        run: python bench/bench.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: bench/results/
+          if-no-files-found: error

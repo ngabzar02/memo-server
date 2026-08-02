@@ -214,7 +214,8 @@ def _pypi(name: str) -> dict | None:
         urls = info.get("project_urls") or {}
         # Documentation > Source/homepage: docs resmi langsung, hemat dir_entry
         docs = urls.get("Documentation") or urls.get("Documentation, ") or ""
-        repo = urls.get("Source", "") or info.get("home_page", "") or ""
+        repo = next((urls[k] for k in ("Source", "Source Code", "Repository",
+                                       "Homepage") if urls.get(k)), "")
         m = re.search(r"github.com[/:]([\w.-]+/[\w.-]+)", repo)
         return {"repo": m.group(1) if m else "", "latest_ver": info.get("version", ""),
                 "trust": 0.0,  # PyPI JSON API tanpa download count; trust dari GitHub/npm
@@ -227,7 +228,12 @@ def _pypi(name: str) -> dict | None:
 def versions_of(name: str) -> list[str]:
     """Riwayat versi dari SEMUA ekosistem (npm/PyPI/crates/Go/RubyGems).
     Pilih sumber dgn versi TERBANYAK: npm 'fastapi' (8 versi kuno) kalah dari
-    PyPI fastapi resmi (100+); npm express (207) menang atas pypi express."""
+    PyPI fastapi resmi (100+); npm express (207) menang atas pypi express.
+    Cache TTL sama dgn resolve (1 jam): alias path memanggil ini per request."""
+    key = f"vo|{name}"
+    hit = _cache.get(key)
+    if hit and time.monotonic() - hit[0] < _CACHE_TTL:
+        return hit[1]
     best: list[str] = []
     for fn in (_npm, _pypi, _crates, _go, _rubygems):
         try:
@@ -236,6 +242,7 @@ def versions_of(name: str) -> list[str]:
                 best = hit["versions"]
         except Exception:  # noqa: BLE001
             continue
+    _cache[key] = (time.monotonic(), best)
     return best
 
 

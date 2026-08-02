@@ -229,17 +229,18 @@ def _maybe_refresh(conn: sqlite3.Connection, lib: dict) -> bool:
 def versions(library_id: str) -> list[str]:
     """List known versions for a library (history dari npm/PyPI bila tersedia)."""
     conn = store.connect()
-    vs = store.get_versions(conn, library_id)
-    if not vs or len(vs) <= 1:  # DB lama/alias tanpa riwayat -> resolve segar
-        cands = registry.resolve(library_id)
+    cands = registry.resolve(library_id)
+    if cands:
+        vs = json.loads(cands[0].get("versions") or "[]")
+        if len(vs) > 1:  # merge pypi/npm sukses -> langsung pakai
+            return vs
+    vs = registry.versions_of(library_id)  # alias/curated: fetch ekosistem resmi
+    if vs:
         if cands:
-            vs = json.loads(cands[0].get("versions") or "[]")
-            if len(vs) <= 1:  # alias/builtin tak bawa versi -> tanya npm/PyPI
-                vs = registry.versions_of(library_id)
-            if vs:
-                cands[0]["versions"] = json.dumps(vs)
-                store.upsert_lib(conn, cands[0])
-    return vs
+            cands[0]["versions"] = json.dumps(vs)
+            store.upsert_lib(conn, cands[0])
+        return vs
+    return store.get_versions(conn, library_id)  # offline: DB (mungkin stale)
 
 
 def main() -> None:

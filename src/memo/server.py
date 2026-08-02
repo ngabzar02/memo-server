@@ -50,6 +50,16 @@ def get_docs(library_id: str, query: str, version: str | None = None) -> list[di
 def _get_docs(library_id: str, query: str, version: str | None = None) -> list[dict[str, Any]]:
     conn = store.connect()
     lib = store.get_lib(conn, library_id)
+    if lib and not version and len(store.get_versions(conn, library_id)) <= 1:
+        # stale trap: docs_url alias berubah (fastapi README -> /reference/deps);
+        # lib versi<=1 (DB lama/README dangkal/ingest timeout) -> cek ulang tiap call.
+        # ponytail: 1 resolve ekstra per call utk lib semacam ini; ganti ke
+        # TTL fetched_at di libs bila network jadi masalah nyata.
+        if _docs_changed(conn, library_id):
+            lib = store.get_lib(conn, library_id)  # di-drop -> None
+    has_chunks = lib is not None and conn.execute(
+        "SELECT COUNT(*) FROM chunks WHERE lib_id=?", (library_id,)
+    ).fetchone()[0] > 0
     if not lib:
         cands = registry.resolve(library_id, query)
         if not cands:
@@ -57,22 +67,14 @@ def _get_docs(library_id: str, query: str, version: str | None = None) -> list[d
         lib = cands[0]
         lib["versions"] = json.dumps([lib["latest_ver"]] if lib.get("latest_ver") else [])
         store.upsert_lib(conn, lib)
+        has_chunks = False
     ver = version or lib.get("latest_ver") or ""
     vec = _embeddings().embed([query])
     query_vec = [float(x) for x in list(vec)[0]]  # numpy float32 -> float, utk json.dumps
     hits = store.search(conn, library_id, query, k=10, query_vec=query_vec)
-    stale = not version and len(store.get_versions(conn, library_id)) <= 1
-    if (not hits or stale) and (not version and _docs_changed(conn, library_id)):
-        # stale trap: docs_url alias berubah (fastapi README -> /reference/deps);
-        # lib versi<=1 (indikasi DB lama/README dangkal) -> cek ulang tiap call
-        lib = store.get_lib(conn, library_id)  # di-drop oleh _docs_changed
-        if not lib:
-            cands = registry.resolve(library_id)
-            if not cands:
-                return []
-            lib = cands[0]
-            lib["versions"] = json.dumps([lib["latest_ver"]] if lib.get("latest_ver") else [])
-            store.upsert_lib(conn, lib)
+    if not has_chunks:
+        # lib baru / ingest pernah timeout: fetch+index sekali. hits kosong pd
+        # lib ber-chunk TIDAK memicu re-ingest (query mungkin memang tak cocok).
         chunks = ingest.ingest_lib(lib.get("docs_url") or f"https://{lib.get('repo','')}")
         if not chunks:
             return []

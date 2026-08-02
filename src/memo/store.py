@@ -22,7 +22,9 @@ MAX_TOKENS = 3000  # cap context sent to model
 
 
 def connect(db_path: str | None = None) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path or DEFAULT_DB)
+    path = Path(db_path or DEFAULT_DB)
+    path.parent.mkdir(parents=True, exist_ok=True)  # fresh install / CI: dir belum ada
+    conn = sqlite3.connect(path)
     conn.enable_load_extension(True)
     sqlite_vec.load(conn)
     conn.execute("PRAGMA journal_mode=WAL")

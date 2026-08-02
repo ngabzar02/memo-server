@@ -8,7 +8,7 @@
 ## Open issues
 - [ ] pydantic hanya 8 chunk dari docs.pydantic.dev (dugaan: navigasi crawler dangkal) @R
 - [ ] django 1 chunk dari llms-full.txt (valid? perlu cek cakupan) @R
-- [ ] reingest openai/anthropic status saat round 1 (dicek saat "bench done") @B
+- [x] reingest openai/anthropic selesai: openai 27, anthropic 27 chunk @B
 
 ## Keputusan tuning (ditulis O)
 - (kosong — menunggu data round 1)

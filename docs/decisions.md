@@ -18,5 +18,6 @@
 | 011 | NO enrich LLM sampai hit@5 ≥ 60% | gap enrich Context7; mahal + butuh API key [V] | enrichment ringan CI (P2-04) pengganti | tinjau ulang bila target tercapai |
 | 012 | NO REST publik / plugin / 33k scale / multi-user | YAGNI single-user [V] | fokus kualitas | buka bila konsumen kedua muncul |
 | 013 | anti-false-positive = requirement MUST | FP-1..FP-5 (resolve karangan, query kosong, chunk tak relevan) | tol./filtrer di trust boundary | gate G2 |
+| 014 | resolve tolak trust < 1.0 (FP-1) | entri karangan trust 0 untuk input sampah (`zzzzzz` → CreateWheel) [V: report-R4 §2] | resolve sampah → `[]` (not found); kandidat tanpa sinyal kualitas (0 stars, tanpa llms, repo tak dikenal) dibuang [FIXED: registry.py:_resolve] | tinjau threshold bila lib kecil valid tertolak |
 
 Format catatan: "u" = belum di-uji / "f" = final.

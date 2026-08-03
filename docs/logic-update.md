@@ -83,6 +83,11 @@ mengontaminasi (django masih open issue di state.md:10).
 | FP-4 | Silent fallback rerank/embed | jalan FTS-only tanpa log | log warning; metric exposure | P1 |
 | FP-5 | Kontaminasi via llms.txt non-EN | masuk tanpa filter | terapkan `_path_allowed`/`_LANG_RE` ke daftar llms juga | P1 |
 
+**Delta [FIXED 2026-08-04]**: FP-1 (trust final < 1.0 ditolak — `registry.py:_resolve`,
+uji `zzzzzz` → `[]`), FP-2 (query kosong → respon eksplisit `[]` + log `reason=empty_query` —
+`server.py:_get_docs`), FP-4 (fallback rerank → metrik `event=fallback, kind=rerank` di
+activity log — `server.py:_get_reranker`). Sisa P1: FP-3 (SAB-7), FP-5 (SAB-9).
+
 Acuan eksternal: praktik "buang hasil < 50% skor top-1, return 'no relevant docs' eksplisit"
 [V: neuledge/context blog 2026-02-08]; OWASP MCP cheat sheet — output tool = untrusted input,
 validasi di trust boundary [V: riset web 2026-08-03].

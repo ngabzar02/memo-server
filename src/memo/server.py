@@ -73,6 +73,9 @@ def _get_reranker():
             _reranker = CrossReranker(threads=2)
         except Exception as e:  # noqa: BLE001
             log.warning("reranker off: %s", str(e)[:100])
+            # FP-4 [P0-04]: fallback tidak senyap — catat metrik di activity log.
+            _log_activity({"t": time.time(), "tool": "get_docs", "event": "fallback",
+                           "kind": "rerank", "detail": str(e)[:100]})
             _reranker = False
     return _reranker or None
 
@@ -137,6 +140,13 @@ _REQUEST_BUDGET = 30.0
 def _get_docs(library_id: str, query: str, version: str | None = None,
               deadline: float | None = None) -> list[dict[str, Any]]:
     t0 = time.monotonic()
+    # FP-2 [P0-03]: query kosong/whitespace -> respon eksplisit [], BUKAN 10
+    # chunk acak dari vec search (anti-false-positive).
+    if not query or not query.strip():
+        _log_activity({"t": time.time(), "tool": "get_docs", "lib": library_id,
+                       "q": query, "ver": version or "", "ms": 0,
+                       "reason": "empty_query", "top": []})
+        return []
     conn = store.connect()
     lib = store.get_lib(conn, library_id)
     chunk_count = conn.execute(

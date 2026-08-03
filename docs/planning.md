@@ -28,10 +28,10 @@ Urutan prioritas: **P0 (validasi & anti-palsu) → P1 (kualitas) → P2 (paritas
 
 | ID | Item | Tipe | Modul | Bukti target |
 |---|---|---|---|---|
-| P0-01 | Bench R5 baseline: restart daemon + 22 query, skor client | bench | bench/, server.py | report-R5 |
-| P0-02 | FP-1: resolve tolak trust < threshold tanpa download/stars → "not found" | fix | registry.py | uji `zzzzzz` |
-| P0-03 | FP-2: get_docs query kosong/omong kosong → respon eksplisit (bukan 10 chunk acak) | fix | server.py | uji `""` |
-| P0-04 | FP-4: fallback rerank/embed → log warning + metrik | fix | server.py | uji sabotase |
+| P0-01 ✅ | Bench R5 baseline: restart daemon + 22 query, skor client | bench | bench/, server.py | report-R5 (2026-08-03, CI) |
+| P0-02 ✅ | FP-1: resolve tolak trust < threshold tanpa download/stars → "not found" | fix | registry.py | uji `zzzzzz` → PASS (2026-08-04) |
+| P0-03 ✅ | FP-2: get_docs query kosong/omong kosong → respon eksplisit (bukan 10 chunk acak) | fix | server.py | uji `""` → PASS (2026-08-04) |
+| P0-04 ✅ | FP-4: fallback rerank/embed → log warning + metrik | fix | server.py | uji sabotase → PASS (2026-08-04) |
 
 ### P1 — Kualitas retrieval (gate G1/G2)
 

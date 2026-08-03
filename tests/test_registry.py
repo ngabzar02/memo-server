@@ -112,7 +112,6 @@ def test_dedupe_merge_missing_fields(monkeypatch):
     assert json.loads(out[0]["versions"]) == ["1.0", "2.0"]  # pypi mengisi versi
 
 
-@pytest.mark.xfail(strict=True, reason="backlog: P0-02")
 def test_resolve_garbage_name_not_found(monkeypatch):
     """SAB-5 (FP-1): nama sampah -> 'library not found', bukan entri trust 0.
     Sekarang resolve mengembalikan kandidat junk (trust 0) selama ada repo/docs."""

@@ -459,7 +459,9 @@ def _resolve(name: str, query: str = "") -> list[dict]:
     out = kept
     _enrich(out, name)  # trust final: stars + llms.txt + penalti fork/README
     out.sort(key=lambda c: -c["trust"])
-    return out
+    # FP-1 [P0-02]: tolak entri karangan — trust final < 1.0 (tanpa sinyal
+    # kualitas: 0 stars, tanpa llms.txt, repo/docs tidak dikenal) -> not found.
+    return [c for c in out if c["trust"] >= 1.0]
 
 
 def _demo() -> None:

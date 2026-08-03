@@ -37,10 +37,7 @@ Saat item selesai, hapus marker xfail dan biarkan test lulus.
 
 | Test | SAB | Backlog |
 |---|---|---|
-| `test_registry.py::test_resolve_garbage_name_not_found` | SAB-5 (resolve sampah) | P0-02 |
-| `test_server.py::test_get_docs_empty_query_explicit_response` | SAB-6 (query kosong) | P0-03 |
 | `test_store.py::test_search_drops_irrelevant_below_relative_threshold` | SAB-7 (relevansi < 50% top-1) | P1-01 |
-| `test_server.py::test_rerank_fallback_logs_metric` | SAB-8 (fallback rerank) | P0-04 |
 | `test_ingest.py::test_llms_filter_skips_non_en_links` | SAB-9 (filter llms non-EN) | P1-02 |
 
 Aturan: **0 failure** di CI; xfail dihitung xfailed, bukan failed.

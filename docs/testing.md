@@ -23,10 +23,10 @@
 | SAB-2 | Bug 2 (hard-split) | `chunk_text("A." * 100_000)` | max chunk ≤ cap (4×) | [FIXED] ingest.py:85,101,113 |
 | SAB-3 | Bug 3 (docs_url berubah) | ganti docs_url registry mock | drop_lib + re-ingest | [FIXED] server.py:145-150 |
 | SAB-4 | Bug 4 (domain) | crawler di-list web.dev untuk nextjs | path di luar domain TIDAK disimpan | [FIXED] ingest.py:218,298-301 |
-| SAB-5 | FP-1 (resolve sampah) | `resolve_library_id("zzzzzz")` | "library not found", bukan entri trust 0 | [BELUM] — P0-02 |
-| SAB-6 | FP-2 (query kosong) | `get_docs(lib, "")` | respon eksplisit, bukan 10 chunk acak | [BELUM] — P0-03 |
+| SAB-5 | FP-1 (resolve sampah) | `resolve_library_id("zzzzzz")` | "library not found", bukan entri trust 0 | [FIXED] registry.py:_resolve (trust < 1.0); `test_resolve_garbage_name_not_found` |
+| SAB-6 | FP-2 (query kosong) | `get_docs(lib, "")` | respon eksplisit, bukan 10 chunk acak | [FIXED] server.py:_get_docs (empty → []); `test_get_docs_empty_query_explicit_response` |
 | SAB-7 | FP-3 (relevansi) | query vs chunk tak relevan | chunk < 50% skor top-1 dibuang | [BELUM] — P1-01 |
-| SAB-8 | FP-4 (fallback) | force gagal load rerank | warning log + tetap respons | [BELUM] — P0-04 |
+| SAB-8 | FP-4 (fallback) | force gagal load rerank | warning log + tetap respons | [FIXED] server.py:_get_reranker (metrik fallback); `test_rerank_fallback_logs_metric` |
 | SAB-9 | FP-5 (llms filter) | llms.txt berisi link non-EN | path non-EN tidak masuk korpus | [BELUM] — P1-02 |
 
 ## 3. Strategi pytest mini (`tests/`)

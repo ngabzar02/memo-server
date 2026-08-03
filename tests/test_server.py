@@ -99,7 +99,6 @@ def test_resolve_merges_versions_from_db(monkeypatch, tmp_path):
 
 # --- SAB-6: query kosong (xfail backlog P0-03) ------------------------------
 
-@pytest.mark.xfail(strict=True, reason="backlog: P0-03")
 def test_get_docs_empty_query_explicit_response(monkeypatch, tmp_path):
     """SAB-6 (FP-2): get_docs(lib, '') -> respon eksplisit ([]), BUKAN chunk
     acak. Sekarang query kosong tetap melewati vec search -> chunk acak."""
@@ -119,7 +118,6 @@ def test_get_docs_empty_query_explicit_response(monkeypatch, tmp_path):
 
 # --- SAB-8: fallback rerank (xfail backlog P0-04) ---------------------------
 
-@pytest.mark.xfail(strict=True, reason="backlog: P0-04")
 def test_rerank_fallback_logs_metric(monkeypatch):
     """SAB-8 (FP-4): reranker gagal load -> warning log + METRIK fallback
     dicatat. Sekarang fallback hanya warning, tanpa metrik di activity log."""

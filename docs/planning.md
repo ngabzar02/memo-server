@@ -37,8 +37,8 @@ Urutan prioritas: **P0 (validasi & anti-palsu) → P1 (kualitas) → P2 (paritas
 
 | ID | Item | Tipe | Modul | Est. dampak |
 |---|---|---|---|---|
-| P1-01 | FP-3: threshold skor relatif (< 50% top-1 buang) + rerank wajib | tuning/fix | store.py, rerank.py | hit@5 naik |
-| P1-02 | FP-5: filter `_path_allowed`/`_LANG_RE` ke daftar llms.txt | fix | ingest.py | bersihkan django dll [V: state.md:10] |
+| P1-01 ✅ | FP-3: threshold skor relatif (< 50% top-1 buang) + rerank wajib | tuning/fix | store.py, rerank.py | uji SAB-7 → PASS (2026-08-04) |
+| P1-02 ✅ | FP-5: filter `_path_allowed`/`_LANG_RE` ke daftar llms.txt | fix | ingest.py | uji SAB-9 → PASS (2026-08-04) |
 | P1-03 | Tuning RRF k (20/40/60/100), pool FTS/vec, top-N rerank | tuning | store.py | A/B replay 22 query |
 | P1-04 | Chunking A/B: 256/50 (overlap aktual) vs 128/32, 384/64 | tuning | ingest.py | akar miss 72% |
 | P1-05 | Warmup 17 lib checklist R4 (flask quickstart, pandas groupby, vue essentials, react useState, dsb) | warmup | ingestion | fragment hit |

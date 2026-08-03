@@ -16,6 +16,7 @@ import memo.store as store
 
 Z = [0.0] * 384          # 384-dim, norm 0 (tidak dipakai utk MATCH)
 P = [1.0] + [0.0] * 383   # cosine +1 terhadap query vector [1,0,...]
+M = [0.5] + [0.0] * 383   # cosine +0.5: moderat, lolos threshold FP-3 (>=50% top-1)
 N = [-1.0] + [0.0] * 383  # cosine -1
 
 
@@ -53,7 +54,7 @@ def test_search_rrf_orders_by_fusion(tmp_db):
         {"path": "api.md", "title": "API",
          "text": "Flask route decorator registers view functions."},
     ]
-    store.add_chunks(tmp_db, "flask", "3.1.0", chunks, [P, N])
+    store.add_chunks(tmp_db, "flask", "3.1.0", chunks, [P, M])
     hits = store.search(tmp_db, "flask", "flask framework", k=2, query_vec=P)
     assert [h["path"] for h in hits] == ["intro.md", "api.md"]
     assert hits[0]["title"] == "Intro"
@@ -101,7 +102,6 @@ def test_add_chunks_embeddings_none_fts_only(tmp_db):
     assert store.search(tmp_db, "flask", "unique", k=5)[0]["path"] == "a.md"
 
 
-@pytest.mark.xfail(strict=True, reason="backlog: P1-01")
 def test_search_drops_irrelevant_below_relative_threshold(tmp_db):
     """SAB-7 (FP-3): chunk dengan skor < 50% top-1 dibuang. Sekarang search
     mengembalikan chunk tidak relevan (vec cosine -1) selama ada di top-k."""

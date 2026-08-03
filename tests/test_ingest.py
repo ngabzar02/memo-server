@@ -80,12 +80,11 @@ def test_is_full():
     assert not ingest.is_full(False, 5)
 
 
-@pytest.mark.xfail(strict=True, reason="backlog: P1-02")
 def test_llms_filter_skips_non_en_links(tmp_db):
     """SAB-9 (FP-5): llms.txt berisi link non-EN -> link tsb TIDAK boleh masuk
-    korpus. Sekarang parse_llms mengembalikan SEMUA link tanpa filter bahasa."""
+    korpus (base_url diberikan -> netloc beda + segmen bahasa non-EN di-skip)."""
     text = (FIXTURES / "llms.txt").read_text()
-    links = ingest.parse_llms(text)
+    links = ingest.parse_llms(text, base_url="https://docs.djangoproject.com/")
     assert links, "fixture llms.txt tidak terparse"
     base = "https://docs.djangoproject.com/"
     assert all(ingest._path_allowed(l["url"], base) for l in links), \

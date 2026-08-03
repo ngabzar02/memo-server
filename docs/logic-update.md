@@ -55,8 +55,10 @@ mengontaminasi (django masih open issue di state.md:10).
 ## 4. Search hybrid (store.py)
 
 - FTS5 BM25: query term AND dulu, fallback OR untuk recall; limit 20 [V: store.py:133-148,164]
-- vec0 cosine: `MATCH ? AND k=20` [V: store.py:155]
-- Fusion **RRF k=60** (bukan normalize+sum — docstring modul tidak sinkron, implementasi yang berlaku) [V: store.py:153]
+- vec0 cosine: `MATCH ? AND k=20`; cos = 1 − distance [V: store.py:142-147]
+- Anti-FP (FP-3): hit dengan cos < 50% cos top-1 dibuang dari fusion (`vec_drop`) — top-1
+  selalu lolos; FTS-only (tanpa query_vec) tidak kena threshold [V: store.py:139-162]
+- Fusion **RRF k=60** (bukan normalize+sum — docstring modul tidak sinkron, implementasi yang berlaku) [V: store.py:160]
 - Output: `trim_to_tokens` budget 3.000 token ≈ 12.000 char [V: store.py:186-188]
 
 **Delta [FIXED]**: chunk oversize di-skip (continue), bukan break — Bug 1 [V: store.py:191,213].
@@ -86,7 +88,11 @@ mengontaminasi (django masih open issue di state.md:10).
 **Delta [FIXED 2026-08-04]**: FP-1 (trust final < 1.0 ditolak — `registry.py:_resolve`,
 uji `zzzzzz` → `[]`), FP-2 (query kosong → respon eksplisit `[]` + log `reason=empty_query` —
 `server.py:_get_docs`), FP-4 (fallback rerank → metrik `event=fallback, kind=rerank` di
-activity log — `server.py:_get_reranker`). Sisa P1: FP-3 (SAB-7), FP-5 (SAB-9).
+activity log — `server.py:_get_reranker`), FP-3 (threshold relevansi relatif — `store.py:139-162`:
+hit dengan cos < 50% cos top-1 dibuang sebelum fusion; cos = 1 − distance dari `chunks_vec`
+(embedding ternormalisasi); FTS-only tanpa query_vec tidak kena threshold), FP-5 (filter bahasa
+llms.txt — `ingest.py:66-72` `parse_llms(text, base_url)` meneruskan base ke `_path_allowed`,
+netloc beda + segmen non-EN di-skip; jalur MCP `ingest_lib` kirim `base_url=base`).
 
 Acuan eksternal: praktik "buang hasil < 50% skor top-1, return 'no relevant docs' eksplisit"
 [V: neuledge/context blog 2026-02-08]; OWASP MCP cheat sheet — output tool = untrusted input,
@@ -99,7 +105,8 @@ validasi di trust boundary [V: riset web 2026-08-03].
 | CHUNK_TOKENS | 256 | ingest.py:12 | |
 | OVERLAP_TOKENS | 50 | ingest.py:13 | TIDAK DIPAKAI — hapus/implementasi |
 | cap chunk per lib | 200 / 200 / 300 | crawl:189, MCP server.py:182, ingest:253 | satu-tempat wajib |
-| RRF k | 60 | store.py:153 | tuning A/B 20-100 |
+| RRF k | 60 | store.py:160 | tuning A/B 20-100 (P1-03) |
+| threshold relevansi | 50% cos top-1 | store.py:151 | relatif per-query (FP-3) |
 | budget token output | 3.000 (~12.000 char) | store.py:188 | |
 | deadline get_docs | 30 s | server.py:134 | |
 | TTL docs_changed | 1 jam | server.py:43-44 | |

@@ -63,12 +63,13 @@ def fetch_text(url: str, timeout: int = 20) -> str | None:
         return None
 
 
-def parse_llms(text: str) -> list[dict]:
-    """Parse llms.txt: markdown links -> [{url, title}]."""
+def parse_llms(text: str, base_url: str | None = None) -> list[dict]:
+    """Parse llms.txt: markdown links -> [{url, title}]. Bila base_url diberikan,
+    link non-EN (netloc beda / segmen bahasa non-EN) di-skip (FP-5/SAB-9)."""
     out = []
     for line in text.splitlines():
         m = re.match(r"^\s*[-*\d.]*\s*\[([^\]]+)\]\((\S+)\)", line)
-        if m and m.group(2).startswith("http"):
+        if m and m.group(2).startswith("http") and (base_url is None or _path_allowed(m.group(2), base_url)):
             out.append({"url": m.group(2), "title": m.group(1)})
     return out
 
@@ -246,7 +247,7 @@ def ingest_lib(docs_url: str, deadline: float | None = None,
         text = _fetch_llms(candidate)
         if not text:
             continue
-        pages = parse_llms(text)
+        pages = parse_llms(text, base_url=base)
         if not pages:
             return ingest_docs(candidate), True
         out = []

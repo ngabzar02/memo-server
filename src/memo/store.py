@@ -136,13 +136,20 @@ def search(conn: sqlite3.Connection, lib_id: str, query: str, k: int = 5, query_
         quoted = " ".join(f'"{t}"' for t in fts_terms)
         fts_and, fts_or = quoted, " OR ".join(f'"{t}"' for t in fts_terms)
     ranked = []  # ordered rowids: union FTS(and->or) + vec, di-RRF
+    vec_drop: set[int] = set()
     if fts_and:
         ranked.extend(_fts_ranks(conn, lib_id, fts_and))
     if query_vec is not None:
-        ranked.extend(r[0] for r in conn.execute(
-            "SELECT rowid FROM chunks_vec WHERE lib_id=? AND embedding MATCH ? AND k=?",
+        vec_hits = conn.execute(
+            "SELECT rowid, distance FROM chunks_vec WHERE lib_id=? AND embedding MATCH ? AND k=?",
             (lib_id, json.dumps(query_vec), 20),
-        ).fetchall())
+        ).fetchall()
+        if vec_hits:
+            # FP-3/SAB-7: anti-FP — hit dengan cos < 50% cos top-1 dibuang.
+            # cos = 1 - distance (embedding ternormalisasi); top-1 selalu lolos.
+            top_cos = 1.0 - vec_hits[0][1]
+            vec_drop = {r[0] for r in vec_hits if 1.0 - r[1] < 0.5 * top_cos}
+            ranked.extend(r[0] for r in vec_hits)
     if not ranked:
         if fts_or and fts_or != fts_and:
             ranked = _fts_ranks(conn, lib_id, fts_or)  # OR: recall terakhir
@@ -151,6 +158,8 @@ def search(conn: sqlite3.Connection, lib_id: str, query: str, k: int = 5, query_
     fused: dict[int, float] = {}
     for cid in ranked:
         fused[cid] = fused.get(cid, 0.0) + 1.0 / (60 + len(fused))  # RRF: rank urut
+    if vec_drop:
+        fused = {cid: s for cid, s in fused.items() if cid not in vec_drop}
     top = [cid for cid, _ in sorted(fused.items(), key=lambda kv: kv[1], reverse=True)[:k]]
     rows = conn.execute(
         f"SELECT id, path, title, text FROM chunks WHERE id IN ({','.join('?'*len(top))})",

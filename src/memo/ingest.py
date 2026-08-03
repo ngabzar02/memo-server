@@ -193,7 +193,7 @@ def ingest_lib(docs_url: str, deadline: float | None = None,
         # probe pendek: llms.txt kecil; 404/slow = langsung ke sumber berikut.
         # deadline absolute: probe yg lama mencuri budget crawl.
         text = fetch_text(candidate, timeout=6)
-        if not text:
+        if not text or _looks_404(text):
             continue
         pages = parse_llms(text)
         if not pages:
@@ -217,6 +217,14 @@ def ingest_lib(docs_url: str, deadline: float | None = None,
         if crawled:
             return crawled, True
     return ingest_docs(base), True
+
+
+def _looks_404(text: str) -> bool:
+    """Sphinx/static docs mengembalikan 404 page dgn status 200: teks pendek
+    berisi 'page you're looking for'/'not found'. llms.txt palsu ini meracuni
+    korpus (1 chunk sampah, terdeteksi saat debug R2 sqlalchemy)."""
+    t = text.lower()
+    return len(text) < 2000 and ("page you're looking for" in t or "not found" in t)
 
 
 def _demo() -> None:

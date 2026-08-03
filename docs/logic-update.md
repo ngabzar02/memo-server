@@ -58,7 +58,8 @@ mengontaminasi (django masih open issue di state.md:10).
 - vec0 cosine: `MATCH ? AND k=20`; cos = 1 − distance [V: store.py:142-147]
 - Anti-FP (FP-3): hit dengan cos < 50% cos top-1 dibuang dari fusion (`vec_drop`) — top-1
   selalu lolos; FTS-only (tanpa query_vec) tidak kena threshold [V: store.py:139-162]
-- Fusion **RRF k=60** (bukan normalize+sum — docstring modul tidak sinkron, implementasi yang berlaku) [V: store.py:160]
+- Fusion **RRF k=60** (default param `rrf_k`, bisa di-A/B; bukan normalize+sum —
+  docstring modul tidak sinkron, implementasi yang berlaku) [V: store.py:128,160]
 - Output: `trim_to_tokens` budget 3.000 token ≈ 12.000 char [V: store.py:186-188]
 
 **Delta [FIXED]**: chunk oversize di-skip (continue), bukan break — Bug 1 [V: store.py:191,213].
@@ -105,7 +106,7 @@ validasi di trust boundary [V: riset web 2026-08-03].
 | CHUNK_TOKENS | 256 | ingest.py:12 | |
 | OVERLAP_TOKENS | 50 | ingest.py:13 | TIDAK DIPAKAI — hapus/implementasi |
 | cap chunk per lib | 200 / 200 / 300 | crawl:189, MCP server.py:182, ingest:253 | satu-tempat wajib |
-| RRF k | 60 | store.py:160 | tuning A/B 20-100 (P1-03) |
+| RRF k | 60 (default, param `rrf_k`) | store.py:128,160 | A/B 20-100: tidak signifikan (P1-03, ADR-016) |
 | threshold relevansi | 50% cos top-1 | store.py:151 | relatif per-query (FP-3) |
 | budget token output | 3.000 (~12.000 char) | store.py:188 | |
 | deadline get_docs | 30 s | server.py:134 | |

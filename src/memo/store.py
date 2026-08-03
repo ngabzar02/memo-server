@@ -125,8 +125,8 @@ def add_chunks(conn: sqlite3.Connection, lib_id: str, ver: str, chunks: list[dic
 
 # --- read -----------------------------------------------------------------
 
-def search(conn: sqlite3.Connection, lib_id: str, query: str, k: int = 5, query_vec: list[float] | None = None) -> list[dict]:
-    """Hybrid: FTS5 BM25 + vector via RRF (reciprocal rank fusion, k=60).
+def search(conn: sqlite3.Connection, lib_id: str, query: str, k: int = 5, query_vec: list[float] | None = None, rrf_k: int = 60) -> list[dict]:
+    """Hybrid: FTS5 BM25 + vector via RRF (reciprocal rank fusion, rrf_k=60).
     AND dulu utk presisi; OR fallback utk recall (benchmark: numpy 0 hasil
     pd AND — banyak docs pakai istilah berbeda utk konsep sama)."""
     fts_terms = re.findall(r"[A-Za-z0-9_]+", query)
@@ -157,7 +157,7 @@ def search(conn: sqlite3.Connection, lib_id: str, query: str, k: int = 5, query_
             return []
     fused: dict[int, float] = {}
     for cid in ranked:
-        fused[cid] = fused.get(cid, 0.0) + 1.0 / (60 + len(fused))  # RRF: rank urut
+        fused[cid] = fused.get(cid, 0.0) + 1.0 / (rrf_k + len(fused))  # RRF: rank urut
     if vec_drop:
         fused = {cid: s for cid, s in fused.items() if cid not in vec_drop}
     top = [cid for cid, _ in sorted(fused.items(), key=lambda kv: kv[1], reverse=True)[:k]]

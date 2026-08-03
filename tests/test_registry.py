@@ -36,6 +36,14 @@ def test_alias_offline():
     assert registry._alias("NextJS") is not None  # case-insensitive
 
 
+def test_alias_requests_docs_root():
+    """P1-06: alias requests nunjuk root docs (korpus penuh via crawl), bukan
+    halaman /user/advanced yang menghasilkan korpus 1 chunk."""
+    a = registry._alias("requests")
+    assert a["docs_url"] == "https://requests.readthedocs.io/en/latest/"
+    assert not a["docs_url"].rstrip("/").endswith("/advanced")
+
+
 def test_builtin_offline():
     b = registry._builtin("os", "python import os list files")
     assert b["id"] == "py:os"

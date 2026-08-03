@@ -20,5 +20,6 @@
 | 013 | anti-false-positive = requirement MUST | FP-1..FP-5 (resolve karangan, query kosong, chunk tak relevan) | tol./filtrer di trust boundary | gate G2 |
 | 014 | resolve tolak trust < 1.0 (FP-1) | entri karangan trust 0 untuk input sampah (`zzzzzz` → CreateWheel) [V: report-R4 §2] | resolve sampah → `[]` (not found); kandidat tanpa sinyal kualitas (0 stars, tanpa llms, repo tak dikenal) dibuang [FIXED: registry.py:_resolve] | tinjau threshold bila lib kecil valid tertolak |
 | 015 | threshold relevansi relatif 50% cos top-1 (FP-3) | chunk tak relevan lolos (nextjs→CDN, pandas→IO, sqlite→README) [V: FP-3 logic-update §7] | hit vec dengan cos < 50% top-1 dibuang sebelum RRF [FIXED: store.py:139-162] — top-1 selalu lolos, FTS-only tanpa embedding tak kena | relatif per-query: noise tetap bila semua kandidat mirip; kandidat rerank wajib (P1) |
+| 016 | RRF k tetap 60 (A/B 20-100 tidak signifikan) | replay 22 query pada release cache: semua k identik (14% hit@5); miss dominan korpus (numpy basics.broadcasting/flask quickstart tidak ter-index) [V: bench/tuning/rrf-k.md] | `store.search(..., rrf_k=60)` jadi param utk A/B ulang pasca korpus lengkap; tooling `bench/replay_rrf.py` | replay ulang WAJIB setelah cache CI baru (FP-5 + alias requests) |
 
 Format catatan: "u" = belum di-uji / "f" = final.

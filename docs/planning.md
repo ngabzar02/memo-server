@@ -39,10 +39,10 @@ Urutan prioritas: **P0 (validasi & anti-palsu) → P1 (kualitas) → P2 (paritas
 |---|---|---|---|---|
 | P1-01 ✅ | FP-3: threshold skor relatif (< 50% top-1 buang) + rerank wajib | tuning/fix | store.py, rerank.py | uji SAB-7 → PASS (2026-08-04) |
 | P1-02 ✅ | FP-5: filter `_path_allowed`/`_LANG_RE` ke daftar llms.txt | fix | ingest.py | uji SAB-9 → PASS (2026-08-04) |
-| P1-03 | Tuning RRF k (20/40/60/100), pool FTS/vec, top-N rerank | tuning | store.py | A/B replay 22 query |
+| P1-03 ✅ | Tuning RRF k (20/40/60/100), pool FTS/vec, top-N rerank | tuning | store.py | A/B replay → k tidak signifikan; k=60 dipertahankan (ADR-016, `bench/tuning/rrf-k.md`); replay ulang pasca korpus lengkap |
 | P1-04 | Chunking A/B: 256/50 (overlap aktual) vs 128/32, 384/64 | tuning | ingest.py | akar miss 72% |
-| P1-05 | Warmup 17 lib checklist R4 (flask quickstart, pandas groupby, vue essentials, react useState, dsb) | warmup | ingestion | fragment hit |
-| P1-06 | Alias requests: docs_url root + llms.txt (bukan halaman `/user/advanced`) | fix | aliases.json | korpus requests penuh |
+| P1-05 | Warmup 17 lib checklist R4 (flask quickstart, pandas groupby, vue essentials, react useState, dsb) | warmup | ingestion | fragment hit (blocker korpus P1-03) |
+| P1-06 ✅ | Alias requests: docs_url root + llms.txt (bukan halaman `/user/advanced`) | fix | aliases.json | warmup --force → 200 chunk (2026-08-04); `test_alias_requests_docs_root` |
 
 ### P2 — Paritas fungsional (gate G3)
 

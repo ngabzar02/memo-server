@@ -151,7 +151,7 @@
   },
   "requests": {
     "repo": "psf/requests",
-    "docs_url": "https://requests.readthedocs.io/en/latest/user/advanced/",
+    "docs_url": "https://requests.readthedocs.io/en/latest/",
     "trust": 95.0,
     "latest_ver": ""
   },

@@ -44,22 +44,4 @@ jobs:
           files: memo-cache.db.gz
       - name: Step summary
         if: always()
-        run: |
-          python - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
-          import re
-          try:
-              log = open("/tmp/build-cache.log").read()
-          except OSError:
-              log = ""
-          ok = len(re.findall(r"cache: \S+ OK", log))
-          fail = re.findall(r"cache: (\S+) FAIL", log)
-          print("## Build cache")
-          print("")
-          print("| metrik | jumlah |")
-          print("|---|---|")
-          print(f"| lib berhasil di-cache | {ok} |")
-          print(f"| lib gagal | {len(fail)} |")
-          if fail:
-              print("")
-              print(f"> Gagal: {', '.join(fail)}")
-          EOF
+        run: python scripts/ci-summary-cache.py /tmp/build-cache.log >> "$GITHUB_STEP_SUMMARY"

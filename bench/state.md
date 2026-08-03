@@ -1,6 +1,6 @@
 # State Swarm Benchmark (live — hanya O yang menulis)
 
-- state: `BUILDING` (CI build-cache 66 lib berjalan; warmup lokal TIDAK diperlukan lagi — fetch-cache menggantikan)
+- state: `BUILDING` (CI build-cache 66 lib; baseline bench = R4 client: hit@5 28% (5/18), resolve 22/22, 6/22 kosong, latency 2.93s — lihat report-R4.md)
 - round terakhir: R2 (MCP langsung daemon HTTP 2026-08-03)
 - skor terakhir: resolve 94% (33/35), docs hit@5 21% (3/14) | target 40%
 - target: docs hit@5 >= 40%

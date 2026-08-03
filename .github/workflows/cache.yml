@@ -1,57 +1,28 @@
-name: cache
-
+name: build-cache
 on:
-  workflow_dispatch:
   push:
-    paths:
-      - "src/**"
-      - "cache-libs.txt"
-      - "pyproject.toml"
-
-env:
-  GITHUB_TOKEN: ${{ github.token }}
-
+    branches: [main]
+    paths: ["src/**", "cache-libs.txt", "aliases.json", "builtins.json", "pyproject.toml", ".github/workflows/cache.yml"]
+  workflow_dispatch:
 permissions:
-  contents: write  # gh release create/delete butuh ini (403 tanpa izin)
-
+  contents: write
 jobs:
-  build-cache:
+  build:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: pip-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
-      - name: Install
+      - name: Install memo
         run: pip install --quiet .
-      - name: Selfcheck (smoke test modul)
-        run: |
-          python -m memo.ingest
-          python -m memo.registry
-          python -m memo.store
-      - name: Warmup semua library (fetch + embed + index)
-        run: |
-          python -m memo.server --warmup --force $(cat cache-libs.txt | grep -v '^#' | grep -v '^$') 2>&1
-      - name: Cek isi DB
-        run: |
-          python -c "
-          from memo import store
-          c = store.connect()
-          libs = c.execute('SELECT COUNT(*) FROM libs').fetchone()[0]
-          chunks = c.execute('SELECT COUNT(*) FROM chunks').fetchone()[0]
-          print(f'libs: {libs}, chunks: {chunks}')
-          assert chunks > 1000, 'cache kosong!'
-          "
-      - name: Publish release cache-latest
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release delete cache-latest --yes --cleanup-tag 2>/dev/null || true
-          gh release create cache-latest "$HOME/.local/share/memo/docs.db" \
-            --title "memo cache" \
-            --notes "Pre-built docs.db ($(date -u +%Y-%m-%dT%H:%MZ)). Download: https://github.com/ngabzar02/memo-server/releases/latest/download/docs.db"
+      - name: Build cache (ingest semua lib + embed penuh)
+        run: memo --build-cache
+      - name: Package docs.db
+        run: gzip -k docs.db && mv docs.db.gz memo-cache.db.gz
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: cache-${{ github.sha }}
+          files: memo-cache.db.gz

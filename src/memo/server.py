@@ -10,6 +10,7 @@ import sqlite3
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
@@ -268,6 +269,125 @@ def versions(library_id: str) -> list[str]:
     return store.get_versions(conn, library_id)  # offline: DB (mungkin stale)
 
 
+def _cache_libs() -> list[str]:
+    """Daftar lib pre-build cache dari cache-libs.txt.
+    Cari di CWD (CI: repo root) lalu di repo root saat dev; bukan site-packages."""
+    here = Path(__file__).resolve()
+    for base in (Path.cwd(), here.parents[2], here.parents[1]):
+        f = base / "cache-libs.txt"
+        if f.exists():
+            return [l.strip() for l in f.read_text().splitlines()
+                    if l.strip() and not l.startswith("#")]
+    return []
+
+
+def _build_cache(limit: int | None = None) -> None:
+    """`--build-cache`: ingest semua lib cache-libs.txt -> docs.db siap upload.
+    Dipakai di GitHub Actions (x86, RAM besar); jalankan dari repo root.
+    Lib yang ada di aliases.json di-upsert dulu utk memotong resolve network."""
+    try:
+        aliases = json.loads((Path(__file__).resolve().parent / "aliases.json").read_text())
+    except OSError:
+        aliases = {}
+    libs = _cache_libs()[:limit] if limit else _cache_libs()
+    ok, fail = 0, []
+    t0 = time.monotonic()
+    conn = store.connect()
+    for name in libs:
+        a = aliases.get(name)
+        if a:  # docs_url sudah pasti: skip resolve network
+            store.upsert_lib(conn, {"id": name, "name": name, "repo": "", "trust": a.get("trust", 95),
+                                    "docs_url": a["docs_url"], "latest_ver": "", "versions": "[]"})
+        try:
+            _get_docs(name, "overview usage documentation")
+            ok += 1
+            print(f"cache: {name} OK", flush=True)
+        except Exception as e:  # noqa: BLE001 — satu lib gagal, lanjut
+            fail.append((name, str(e)[:80]))
+            print(f"cache: {name} FAIL {str(e)[:80]}", flush=True)
+    print(f"cache: selesai {ok}/{len(libs)} dalam {round(time.monotonic() - t0)}s", flush=True)
+    if fail:
+        print(f"cache: GAGAL: {[n for n, _ in fail]}", flush=True)
+
+
+_CACHE_REPO = os.environ.get("MEMO_CACHE_REPO", "ngabzar02/memo-server")
+
+
+def _fetch_cache(force: bool = False, dry_run: bool = False) -> int:
+    """`--fetch-cache`: unduh pre-built docs.db dari GitHub release terbaru.
+    Asset: memo-cache.db.gz. Backup DB lama -> verifikasi integrity -> ganti.
+    Versi terpakai dicatat di <docs.db dir>/cache.version (skip bila sama)."""
+    import gzip
+    import shutil
+    import urllib.request
+
+    api = f"https://api.github.com/repos/{_CACHE_REPO}/releases?per_page=1"
+    try:
+        with urllib.request.urlopen(urllib.request.Request(
+                api, headers={"User-Agent": "memo"}), timeout=30) as r:
+            releases = json.load(r)
+    except Exception as e:  # noqa: BLE001
+        print(f"cache: gagal cek release: {str(e)[:100]}", file=sys.stderr)
+        return 1
+    if not releases:
+        print("cache: tidak ada release", file=sys.stderr)
+        return 1
+    ver = releases[0]["tag_name"]
+    asset = next((a for a in releases[0].get("assets", [])
+                  if a["name"] == "memo-cache.db.gz"), None)
+    if not asset:
+        # release terbaru bisa saja tanpa asset (tag manual); cari release
+        # sebelumnya yang punya asset (max 10)
+        page = f"https://api.github.com/repos/{_CACHE_REPO}/releases?per_page=10"
+        try:
+            with urllib.request.urlopen(urllib.request.Request(
+                    page, headers={"User-Agent": "memo"}), timeout=30) as r:
+                releases = json.load(r)
+        except Exception:  # noqa: BLE001
+            releases = []
+        for rel in releases:
+            a = next((x for x in rel.get("assets", [])
+                      if x["name"] == "memo-cache.db.gz"), None)
+            if a:
+                ver, asset = rel["tag_name"], a
+                break
+    if not asset:
+        print("cache: tidak ada release dengan asset memo-cache.db.gz", file=sys.stderr)
+        return 1
+    ver_file = Path(store.DEFAULT_DB).parent / "cache.version"
+    cur = ver_file.read_text().strip() if ver_file.exists() else ""
+    if not force and cur == ver:
+        print(f"cache: sudah terbaru ({ver})")
+        return 0
+    if dry_run:
+        print(f"cache: dry-run: {ver} ({asset['size']} B) -> {store.DEFAULT_DB}")
+        return 0
+    print(f"cache: unduh {ver} ({asset['size']} B)...")
+    tmp = Path(store.DEFAULT_DB + ".gz")
+    with urllib.request.urlopen(urllib.request.Request(
+            asset["browser_download_url"], headers={"User-Agent": "memo"}), timeout=900) as r, \
+            open(tmp, "wb") as f:
+        shutil.copyfileobj(r, f)
+    bak = Path(store.DEFAULT_DB + ".pre-cache")
+    if Path(store.DEFAULT_DB).exists():
+        shutil.move(store.DEFAULT_DB, bak)
+    with gzip.open(tmp, "rb") as gz, open(store.DEFAULT_DB, "wb") as f:
+        shutil.copyfileobj(gz, f)
+    tmp.unlink(missing_ok=True)
+    check = sqlite3.connect(store.DEFAULT_DB, timeout=30)
+    ok = check.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    check.close()
+    if not ok:
+        shutil.move(bak, store.DEFAULT_DB)  # rollback
+        print("cache: file korup, rollback ke DB lama", file=sys.stderr)
+        return 1
+    Path(store.DEFAULT_DB + "-wal").unlink(missing_ok=True)
+    Path(store.DEFAULT_DB + "-shm").unlink(missing_ok=True)
+    ver_file.write_text(ver)
+    print(f"cache: OK — {ver} aktif. Restart daemon (mcp-boot.sh) agar dipakai.")
+    return 0
+
+
 def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "--warmup":
         # Pre-ingest: cold fetch di MCP request > 30s timeout client, jadi
@@ -295,6 +415,11 @@ def main() -> None:
         return
     logging.basicConfig(level=logging.WARNING)
     argv = sys.argv[1:]
+    if "--build-cache" in argv:
+        _build_cache(limit=_flag_int(argv, "--limit"))
+        return
+    if "--fetch-cache" in argv:
+        raise SystemExit(_fetch_cache(force="--force" in argv, dry_run="--dry-run" in argv))
     if "--transport" in argv:
         transport = argv[argv.index("--transport") + 1]
     else:
@@ -308,3 +433,12 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def _flag_int(argv: list[str], flag: str) -> int | None:
+    if flag in argv:
+        try:
+            return int(argv[argv.index(flag) + 1])
+        except (IndexError, ValueError):
+            return None
+    return None

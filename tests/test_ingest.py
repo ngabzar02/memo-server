@@ -46,6 +46,14 @@ def test_chunk_text_returns_text_when_empty():
     assert ingest.chunk_text("   ") == ["   "]
 
 
+def test_extract_skips_non_html():
+    """Guard CI-1: body kosong/JS-only/anti-bot tidak sampai ke trafilatura
+    (pernah membanjiri log CI dgn ERROR empty HTML tree)."""
+    assert ingest._extract("") == ""
+    assert ingest._extract("   ") == ""
+    assert ingest._extract('{"error": "rate limited"}') == ""
+
+
 def test_path_allowed_same_domain_and_en(tmp_db):
     """SAB-4: path di luar domain base TIDAK diizinkan; bahasa non-EN di-skip."""
     assert ingest._path_allowed("https://nextjs.org/docs/app/page", "https://nextjs.org/docs")

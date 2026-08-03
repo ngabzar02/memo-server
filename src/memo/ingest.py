@@ -35,11 +35,18 @@ _trafilatura = None
 
 def _extract(text: str) -> str:
     """Lazy import trafilatura (~1s) — server start harus cepat utk MCP
-    handshake 30s (ARM contention saat 2 server start bersamaan)."""
+    handshake 30s (ARM contention saat 2 server start bersamaan).
+    ponytail: input yang jelas bukan HTML (kosong/JS-only/anti-bot) dilewati
+    sebelum trafilatura; logger trafilatura diredam CRITICAL — halaman kosong
+    bukan error, extract -> None -> "", hanya logging internalnya yang berisik."""
     global _trafilatura
     if _trafilatura is None:
+        import logging
         import trafilatura
+        logging.getLogger("trafilatura").setLevel(logging.CRITICAL)
         _trafilatura = trafilatura
+    if len(text.strip()) < 64 or "<" not in text:
+        return ""
     return _trafilatura.extract(text, include_comments=False) or ""
 
 

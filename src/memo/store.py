@@ -188,7 +188,7 @@ def trim_to_tokens(chunks: list[dict], max_tokens: int = MAX_TOKENS) -> list[dic
     budget, out = max_tokens * 4, []
     for c in chunks:
         if len(c["text"]) > budget:
-            break
+            continue  # skip chunk oversize, tetap kirim sisanya
         out.append(c)
         budget -= len(c["text"])
     return out
@@ -210,7 +210,7 @@ def _demo() -> None:
     add_chunks(conn, "flask", "3.1.0", chunks, emb)
     hits = search(conn, "flask", "framework", k=2)
     assert hits and hits[0]["title"] == "Intro", f"BM25 hybrid failed: {hits}"
-    assert trim_to_tokens([{"text": "x" * 20000}]) == [], "trim failed"
+    assert trim_to_tokens([{"text": "x" * 20000}, {"text": "ok"}]) == [{"text": "ok"}], "trim failed"
     assert get_versions(conn, "flask") == ["3.1.0", "2.3.0"]
     hits2 = search(conn, "flask", "flask.route (decorator)", k=2)  # FTS5 escaping
     assert hits2, f"FTS5 escaping failed: {hits2}"

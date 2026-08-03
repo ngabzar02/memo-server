@@ -5,11 +5,30 @@ Sources: llms-full.txt / llms.txt (list of markdown links) or direct URL.
 
 import re
 import time
+import urllib.parse as up
 
 import httpx
 
 CHUNK_TOKENS = 256
 OVERLAP_TOKENS = 50
+
+_LANG_RE = re.compile(r"/(en|es|fr|de|it|ja|ko|zh|pt-br|pl|ru|el|ar|tr|uk|cs|nl|fi|sv|da|no|id|th|vi)(?:/|$)", re.I)
+
+
+def _path_allowed(url: str, base_url: str) -> bool:
+    """Crawler filter (R4-BUG4): netloc SAMA dgn base_url + path TANPA segmen
+    bahasa non-EN. /en/6.0/... diterima; /pt-br/6.0/... di-skip."""
+    u, b = up.urlparse(url), up.urlparse(base_url)
+    if u.netloc != b.netloc:
+        return False
+    m = _LANG_RE.search(u.path)
+    return m is None or m.group(1).lower() == "en"
+
+
+def is_full(complete: bool, n_chunks: int, min_chunks: int = 3) -> bool:
+    """full flag (R4-BUG5): complete TAPI korpus < 3 chunk = parsial palsu
+    (requests 1 chunk full=1). Re-ingest akan terjadi di call berikutnya."""
+    return complete and n_chunks >= min_chunks
 
 _trafilatura = None
 
@@ -73,6 +92,14 @@ def chunk_text(text: str, max_tokens: int = CHUNK_TOKENS, overlap: int = OVERLAP
         cur2, cur_tok = [], 0
         for p in para:
             pt = max(1, len(p) // 4)
+            if pt > max_tokens:
+                # paragraf tunggal oversize: flush cur2, lalu hard split
+                # (cari newline terdekat sebelum batas; tak ada -> potong mentah)
+                if cur2:
+                    out.append("\n\n".join(cur2))
+                    cur2, cur_tok = [], 0
+                out.extend(_split_oversize(p, max_tokens * 4))
+                continue
             if cur2 and cur_tok + pt > max_tokens:
                 out.append("\n\n".join(cur2))
                 cur2, cur_tok = [], 0
@@ -81,6 +108,22 @@ def chunk_text(text: str, max_tokens: int = CHUNK_TOKENS, overlap: int = OVERLAP
         if cur2:
             out.append("\n\n".join(cur2))
     return out or [text]
+
+
+def _split_oversize(p: str, limit: int) -> list[str]:
+    """Potong paragraf raksasa jadi potongan <= limit char. ponytail: hard
+    split per karakter; cuma guard newline — code block tetap bisa terpotong,
+    upgrade ke parse code fence bila dokumen code-heavy menuntut."""
+    pieces, s = [], p
+    while len(s) > limit:
+        cut = s.rfind("\n", 0, limit)
+        if cut <= 0:
+            cut = limit
+        pieces.append(s[:cut])
+        s = s[cut:].lstrip("\n")
+    if s:
+        pieces.append(s)
+    return pieces
 
 
 def ingest_docs(url: str) -> list[dict]:
@@ -114,7 +157,6 @@ def _crawl(start_url: str, deadline: float, existing: set[str] | None = None,
     prioritas tutorial/user/reference + URL yg match kata kunci query (halaman
     yg paling mungkin menjawab diproses duluan), fetch 4 PARALEL. Budget
     deadline + cap 200 chunk. existing: path sudah ter-chunk di DB -> skip."""
-    import urllib.parse as up
     from concurrent.futures import ThreadPoolExecutor
     base = start_url.rstrip("/") + "/"  # urljoin butuh dir base (tanpa slash = file)
     terms = [t.lower() for t in re.findall(r"[a-z]+", query.lower()) if len(t) > 3]
@@ -173,7 +215,7 @@ def _crawl(start_url: str, deadline: float, existing: set[str] | None = None,
                 nxt = []
                 for href in re.findall(r'href="([^"#?]+)', html):
                     u = up.urljoin(url, href)
-                    if (u.startswith(base) and u not in seen
+                    if (_path_allowed(u, base) and u not in seen
                             and not any(s in u for s in ("_static", "_sources", "genindex", "search.html", "404", "whatsnew/", "release/"))):
                         nxt.append(u)
                 queue.extend(nxt)
@@ -252,7 +294,16 @@ def _demo() -> None:
     assert len(llms) == 2, "parse_llms gagal"
     chunks = chunk_text("\n\n".join(f"Para {i} " + "B." * 400 for i in range(20)))
     assert len(chunks) >= 2, f"chunk_text gagal: {len(chunks)} chunk"
-    print(f"SELFCHECK ingest: PASS (parse {len(llms)} link, {len(chunks)} chunk dari 4000 char)")
+    # R4-BUG4: filter domain+bahasa
+    assert _path_allowed("https://nextjs.org/docs/app/page", "https://nextjs.org/docs")
+    assert not _path_allowed("https://web.dev/articles", "https://nextjs.org/docs")
+    assert not _path_allowed("https://docs.djangoproject.com/pt-br/6.0/intro/", "https://docs.djangoproject.com/en/6.0/")
+    assert _path_allowed("https://docs.djangoproject.com/en/6.0/ref/", "https://docs.djangoproject.com/en/6.0/")
+    # R4-BUG5: full palsu (requests 1 chunk)
+    assert not is_full(True, 1), "1 chunk complete != full"
+    assert is_full(True, 5), "5 chunk complete == full"
+    assert not is_full(False, 5), "incomplete != full"
+    print(f"SELFCHECK ingest: PASS (parse {len(llms)} link, {len(chunks)} chunk, B4/B5 filter ok)")
 
 
 if __name__ == "__main__":

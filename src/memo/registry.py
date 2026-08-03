@@ -443,9 +443,20 @@ def _resolve(name: str, query: str = "") -> list[dict]:
             continue
         seen[key] = len(out)
         out.append(c)
-    # buang noise: entri tanpa repo & docs_url (PyPI bare: tak bisa dipakai
-    # get_docs) — info versinya sudah ter-merge via dedupe di atas
-    out = [c for c in out if c["repo"] or c["docs_url"]]
+    # buang noise: entri tanpa repo & docs_url (PyPI/npm bare: tak bisa dipakai
+    # get_docs) — info versinya di-merge dulu ke kandidat lain dgn id sama
+    # (npm tsup: repo/docs kosong padahal latest_ver 8.5.1 -> Bug 6)
+    kept = [c for c in out if c["repo"] or c["docs_url"]]
+    for c in out:
+        if c["repo"] or c["docs_url"]:
+            continue
+        for k in kept:
+            if k["id"] == c["id"]:
+                if not k.get("latest_ver"):
+                    k["latest_ver"] = c.get("latest_ver", "")
+                if k.get("versions") in ("[]", ""):
+                    k["versions"] = c.get("versions") or "[]"
+    out = kept
     _enrich(out, name)  # trust final: stars + llms.txt + penalti fork/README
     out.sort(key=lambda c: -c["trust"])
     return out

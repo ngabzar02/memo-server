@@ -37,6 +37,11 @@ def _log_activity(entry: dict[str, Any]) -> None:
 _lib_locks: dict[str, threading.Lock] = {}
 _lib_locks_guard = threading.Lock()
 
+# Bug 3: hasil cek _docs_changed per lib, TTL 1 jam — hindari resolve (network)
+# di tiap get_docs untuk lib yang docs_url-nya tidak berubah.
+_docs_changed_cache: dict[str, float] = {}
+_DOCS_CHANGED_TTL = 3600.0
+
 
 def _lock_for(lib_id: str) -> threading.Lock:
     with _lib_locks_guard:
@@ -93,6 +98,18 @@ def resolve_library_id(library_name: str, query: str = "") -> list[dict[str, Any
     with trust scores and latest version. query is optional context to disambiguate."""
     t0 = time.monotonic()
     out = registry.resolve(library_name, query)
+    # Bug 6: cands bisa kehilangan versi (npm bare dibuang di dedupe registry);
+    # isi dari DB (hasil ingest sebelumnya) — tanpa network tambahan.
+    conn = store.connect()
+    for c in out:
+        if c.get("latest_ver") and c.get("versions") not in ("[]", ""):
+            continue
+        db = store.get_lib(conn, c["id"])
+        if db and db.get("latest_ver"):
+            if not c.get("latest_ver"):
+                c["latest_ver"] = db["latest_ver"]
+            if c.get("versions") in ("[]", ""):
+                c["versions"] = db.get("versions") or json.dumps([db["latest_ver"]])
     _log_activity({"t": time.time(), "tool": "resolve", "name": library_name,
                    "q": query, "ms": round((time.monotonic() - t0) * 1000),
                    "top": [{"id": c["id"], "trust": round(c["trust"], 1),
@@ -124,10 +141,10 @@ def _get_docs(library_id: str, query: str, version: str | None = None,
     chunk_count = conn.execute(
         "SELECT COUNT(*) FROM chunks WHERE lib_id=?", (library_id,)
     ).fetchone()[0]
-    if lib and not version and "github.com" in (lib.get("docs_url") or ""):
-        # trap hanya utk docs_url yg masih README GitHub (fastapi/requests dulu
-        # bocor ke sini); docs_url resmi (numpy.org dll) jarang pindah -> skip
-        # resolve 14s per call. resolve dicache TTL di registry.
+    if lib and not version:
+        # docs_url berubah (lib pindah domain: fastmcp glama.ai -> gofastmcp.com)
+        # -> drop chunks basi. _docs_changed cache TTL 1 jam -> resolve (network)
+        # tidak dipanggil per request; registry.resolve juga TTL-cache sendiri.
         if _docs_changed(conn, library_id):
             lib = store.get_lib(conn, library_id)  # di-drop -> None
     if lib and not version:
@@ -158,7 +175,7 @@ def _get_docs(library_id: str, query: str, version: str | None = None,
         if not chunks:
             if not has_chunks:
                 return []
-            conn.execute("UPDATE libs SET full=? WHERE id=?", (1 if complete else 0, library_id))
+            conn.execute("UPDATE libs SET full=? WHERE id=?", (1 if ingest.is_full(complete, len(chunks)) else 0, library_id))
             conn.commit()
         else:
             chunks = chunks[:200]  # cap: 200 embed ~3 menit di ARM; cukup utk top docs
@@ -173,7 +190,7 @@ def _get_docs(library_id: str, query: str, version: str | None = None,
                 # (bge-small quantized) > budget 20s. Vec penuh dari pre-built
                 # CI; hits tetap relevan via BM25+RRF (teruji broadcasting).
                 store.add_chunks(conn, library_id, ver, chunks)
-            conn.execute("UPDATE libs SET full=? WHERE id=?", (1 if complete else 0, library_id))
+            conn.execute("UPDATE libs SET full=? WHERE id=?", (1 if ingest.is_full(complete, len(chunks)) else 0, library_id))
             conn.commit()
         hits = store.search(conn, library_id, query, k=10, query_vec=query_vec)
     hits = _rerank(query, hits)
@@ -184,15 +201,21 @@ def _get_docs(library_id: str, query: str, version: str | None = None,
 
 
 def _docs_changed(conn: sqlite3.Connection, library_id: str) -> bool:
-    """True jika docs_url resolve != DB -> drop lib (minta re-ingest). Network: cek tipis."""
+    """True jika docs_url resolve != DB -> drop lib (minta re-ingest). Network:
+    registry.resolve TTL-cache 1 jam; hasil per-lib di-cache in-memory di sini
+    (TTL 1 jam) agar lib dgn resolve cache-miss tidak menunggu network."""
     lib = store.get_lib(conn, library_id)
     if not lib:
+        return False
+    now = time.monotonic()
+    if now - _docs_changed_cache.get(library_id, -float("inf")) < _DOCS_CHANGED_TTL:
         return False
     cands = registry.resolve(library_id)
     if not cands:
         return False
     new_url = cands[0].get("docs_url") or f"https://{cands[0].get('repo', '')}"
     old_url = lib.get("docs_url") or f"https://{lib.get('repo', '')}"
+    _docs_changed_cache[library_id] = now
     if new_url != old_url:
         store.drop_lib(conn, library_id)
         return True

@@ -1,6 +1,6 @@
 # State Swarm Benchmark (live — hanya O yang menulis)
 
-- state: `BUILDING` (warmup korpus 5 lib)
+- state: `BUILDING` (warmup ulang 4 lib setelah fix add_chunks)
 - round terakhir: R2 (MCP langsung daemon HTTP 2026-08-03)
 - skor terakhir: resolve 94% (33/35), docs hit@5 21% (3/14) | target 40%
 - target: docs hit@5 >= 40%

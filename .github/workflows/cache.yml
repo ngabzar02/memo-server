@@ -20,7 +20,7 @@ jobs:
       - name: Build cache (ingest semua lib + embed penuh)
         run: memo --build-cache
       - name: Package docs.db
-        run: gzip -k docs.db && mv docs.db.gz memo-cache.db.gz
+        run: gzip -k ~/.local/share/memo/docs.db && mv ~/.local/share/memo/docs.db.gz memo-cache.db.gz
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:

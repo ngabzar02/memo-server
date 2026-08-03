@@ -111,7 +111,9 @@ def get_docs(library_id: str, query: str, version: str | None = None) -> list[di
 # batas waktu request MCP: client timeout ~30s lalu disconnect -> proses keluar.
 # deadline 20s (bufer utk embed + resolve) menjamin request selesai sebelum
 # timeout; sisa ingest dilanjutkan di call berikutnya (flag full=0 -> lanjut).
-_REQUEST_BUDGET = 20.0
+# Daemon+bridge: bridge timeout 120s, opencode request timeout tak diketahui ->
+# 30s moderat; ingest dalam per call (iterative deepening). Embed FTS-only.
+_REQUEST_BUDGET = 30.0
 
 
 def _get_docs(library_id: str, query: str, version: str | None = None,

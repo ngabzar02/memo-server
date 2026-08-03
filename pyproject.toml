@@ -15,7 +15,7 @@ dependencies = [
 memo = "memo.server:main"
 
 [project.optional-dependencies]
-test = ["pytest>=8", "pytest-github-actions-annotate-failures>=1"]
+test = ["pytest>=8", "pytest-github-actions-annotate-failures>=0.4"]
 
 [build-system]
 requires = ["hatchling"]

@@ -6,3 +6,5 @@ docs.db
 __pycache__/
 *.pyc
 bench/activity.log
+cache.version
+docs.db.pre-cache

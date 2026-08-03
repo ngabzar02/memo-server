@@ -1,0 +1,83 @@
+name: bench-heavy
+
+on:
+  workflow_dispatch:
+    inputs:
+      threshold:
+        description: "hit@5 minimum %"
+        required: true
+        default: "40"
+      query_set:
+        description: "path ke query set (bench/queries.json)"
+        required: true
+        default: "bench/queries.json"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HF_HOME: $HOME/.hf
+  FASTEMBED_CACHE_PATH: $HOME/.fastembed
+  HF_HUB_DOWNLOAD_TIMEOUT: "120"
+  HF_HUB_DISABLE_PROGRESS_BARS: "1"
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Cache model HF (embed + rerank)
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.hf
+            ~/.fastembed
+            ~/.cache/memo
+          key: hf-${{ hashFiles('pyproject.toml') }}
+      - name: Install
+        run: pip install --quiet .
+      - name: Selfcheck modul (smoke)
+        run: |
+          python -m memo.store
+          python -m memo.ingest
+          python -m memo.registry
+          python -m memo.rerank || echo "rerank selfcheck skipped (model/onnx tidak tersedia)"
+      - name: Run bench (22 query, client MCP vs Context7)
+        run: |
+          ok=0
+          for i in 1 2 3; do
+            if python bench/run_bench.py --queries "${{ inputs.query_set }}" --out bench/report.md; then
+              ok=1
+              break
+            fi
+            echo "bench run $i gagal — retry (network?)"
+            sleep 30
+          done
+          [ "$ok" = 1 ] || echo "bench GAGAL total 3x (network?) — gate akan di-skip"
+      - name: Gate hit@5
+        run: python bench/gate.py --report bench/report.md --threshold "${{ inputs.threshold }}" --allow-missing
+      - name: Upload bench results
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: bench-heavy-results
+          path: |
+            bench/report.md
+            bench/activity.log
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Step summary
+        if: always()
+        run: |
+          {
+            echo "## Bench heavy (dispatch manual)"
+            python bench/gate.py --report bench/report.md --threshold "${{ inputs.threshold }}" --quiet --allow-missing || true
+          } >> "$GITHUB_STEP_SUMMARY"

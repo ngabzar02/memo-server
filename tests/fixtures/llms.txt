@@ -1,0 +1,7 @@
+# Django docs
+
+- [Django](https://docs.djangoproject.com/en/6.0/)
+- [Django quickstart](https://docs.djangoproject.com/en/6.0/intro/overview/)
+- [Django pt-br](https://docs.djangoproject.com/pt-br/6.0/)
+- [Django es](https://docs.djangoproject.com/es/6.0/)
+- [Flask](https://flask.palletsprojects.com/)

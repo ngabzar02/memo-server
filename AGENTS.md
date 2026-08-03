@@ -32,7 +32,7 @@ bge-small via fastembed, fusion + token-budget trim).
 ## Konvensi
 - WAL write: tulis `.tmp` → rename atomik untuk file state; jangan menulis langsung
 - State & skor live di `bench/state.md` (hanya O yang menulis); round log di `bench/rounds/`
-- Dokumen keputusan di `docs/` (PLAN/SRS ditulis agent paralel — lihat pointer di bawah)
+- Dokumen keputusan di `docs/` — index & aturan: `docs/README.md` (canonical lowercase; `docs/archive/*-v1.md` = riwayat superseded)
 - Skor benchmark dihitung dari output yang diterima CLIENT MCP, BUKAN `bench/activity.log` (log tidak 1:1 — Bug 1 trim_to_tokens)
 - Daemon WAJIB restart setelah ubah `server.py` sebelum tes (mcp-boot.sh idempoten)
 
@@ -40,11 +40,13 @@ bge-small via fastembed, fusion + token-budget trim).
 - `git push origin main` SETELAH SETIAP update selesai (fix, warmup, bench, dokumen) sebelum lanjut fase
 - JANGAN pernah tulis secret/token/API key ke file, log, commit, atau chat — cukup `[REDACTED: ~/.git-credentials]`
 - Jangan edit `docs.db` langsung selain lewat kode/server
-- Benchmark target: docs hit@5 ≥ 40% (per `bench/state.md`; baseline Context7 28%)
+- Benchmark target: docs hit@5 ≥ 40% → ≥ 60% (M2, `docs/quality-gates.md`); baseline Context7 28%
 - Bug fixes wajib disertai uji sabotase (lihat `bench/report-R4.md` §6); skor README tidak boleh dikarang
 
 ## Pointer
-- `docs/PLAN.md` (dalam pembuatan — backlog), `docs/BRD.md`, `docs/SRS.md` (belum ada; dibuat agent paralel)
+- `docs/README.md` — index dokumen canonical (menggantikan pointer lama BRD/PLAN/SRS)
+- `docs/planning.md` (roadmap + backlog), `docs/brd.md`, `docs/srs.md`, `docs/agent.md`, `docs/decisions.md`
+- `docs/quality-gates.md` — metrik & gate (single source), `docs/logic-update.md` — konstanta/algoritma
 - `bench/swarm.md` — protokol orkestrasi multi-agent benchmark
 - `bench/BRUTAL.md` — protokol benchmark MCP langsung (Blok A/B)
 - `bench/research/*.md` — riset (context7.md, memo-internals.md, R4.md)

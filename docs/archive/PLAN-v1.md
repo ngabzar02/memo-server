@@ -1,3 +1,5 @@
+<!-- SUPERSEDED 2026-08-03 by docs/PLAN.md (canonical v2). Riwayat: boleh dikutip, jangan di-update. -->
+
 # PLAN — memo: Implementasi & Roadmap
 
 Tanggal: 2026-08-03 · Penulis: O (Orchestrator, peran O-asisten planning)

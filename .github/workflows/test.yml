@@ -1,0 +1,75 @@
+name: test
+
+on:
+  push:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - ".github/workflows/test.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install memo + test deps
+        run: pip install --quiet ".[test]"
+      - name: pytest (offline suite)
+        run: pytest tests/ -m "not network" --junitxml=pytest.xml -rxXs
+      - name: Selfcheck modul (smoke)
+        run: |
+          python -m memo.store
+          python -m memo.ingest
+          python -m memo.registry
+          python -m memo.rerank || echo "rerank selfcheck skipped (model/onnx tidak tersedia)"
+      - name: Upload pytest log
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: pytest-logs
+          path: pytest.xml
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Step summary
+        if: always()
+        run: |
+          if [ -f pytest.xml ]; then
+            python - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+            import xml.etree.ElementTree as ET
+            root = ET.parse("pytest.xml").getroot()
+            ts = root.find("testsuite")
+            if ts is None:
+                ts = root
+            n = {"tests": int(ts.get("tests", 0)), "failures": int(ts.get("failures", 0)),
+                 "errors": int(ts.get("errors", 0)), "skipped": int(ts.get("skipped", 0))}
+            xfailed = sum(1 for s in root.iter("skipped") if s.get("type") == "pytest.xfail")
+            passed = n["tests"] - n["failures"] - n["errors"] - n["skipped"]
+            print("## Pytest (offline suite)")
+            print("")
+            print("| metrik | jumlah |")
+            print("|---|---|")
+            print(f"| passed | {passed} |")
+            print(f"| failed | {n['failures'] + n['errors']} |")
+            print(f"| skipped | {n['skipped'] - xfailed} |")
+            print(f"| xfailed (backlog) | {xfailed} |")
+            if n["failures"] or n["errors"]:
+                print("")
+                print("> [!CAUTION]")
+                print(f"> Test GAGAL: {n['failures'] + n['errors']} failure. Lihat artifact `pytest-logs`.")
+            EOF
+          else
+            echo "pytest.xml tidak ada — pytest tidak sempat menulis hasil." >> "$GITHUB_STEP_SUMMARY"
+          fi

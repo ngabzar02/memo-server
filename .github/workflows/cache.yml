@@ -6,19 +6,35 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  HF_HOME: $HOME/.hf
+  FASTEMBED_CACHE_PATH: $HOME/.fastembed
+  HF_HUB_DOWNLOAD_TIMEOUT: "120"
+  HF_HUB_DISABLE_PROGRESS_BARS: "1"
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      - name: Cache model HF (embed + rerank)
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.hf
+            ~/.fastembed
+            ~/.cache/memo
+          key: hf-${{ hashFiles('pyproject.toml') }}
       - name: Install memo
         run: pip install --quiet .
       - name: Build cache (ingest semua lib + embed penuh)
-        run: memo --build-cache
+        run: memo --build-cache 2>&1 | tee /tmp/build-cache.log
       - name: Package docs.db
         run: gzip -k ~/.local/share/memo/docs.db && mv ~/.local/share/memo/docs.db.gz memo-cache.db.gz
       - name: Publish release
@@ -26,3 +42,24 @@ jobs:
         with:
           tag_name: cache-${{ github.sha }}
           files: memo-cache.db.gz
+      - name: Step summary
+        if: always()
+        run: |
+          python - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import re
+          try:
+              log = open("/tmp/build-cache.log").read()
+          except OSError:
+              log = ""
+          ok = len(re.findall(r"cache: \S+ OK", log))
+          fail = re.findall(r"cache: (\S+) FAIL", log)
+          print("## Build cache")
+          print("")
+          print("| metrik | jumlah |")
+          print("|---|---|")
+          print(f"| lib berhasil di-cache | {ok} |")
+          print(f"| lib gagal | {len(fail)} |")
+          if fail:
+              print("")
+              print(f"> Gagal: {', '.join(fail)}")
+          EOF

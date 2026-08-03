@@ -1,3 +1,5 @@
+<!-- SUPERSEDED 2026-08-03 by docs/BRD.md (canonical v2). Riwayat: boleh dikutip, jangan di-update. -->
+
 # BRD — memo: MCP Server Dokumentasi Library Lokal
 
 - **Versi**: 1.0 · **Tanggal**: 2026-08-03 · **Penulis**: BE (Developer)

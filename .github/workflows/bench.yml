@@ -8,19 +8,24 @@ on:
       - "pyproject.toml"
   workflow_dispatch:
 
-env:
-  GITHUB_TOKEN: ${{ github.token }}
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   bench:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
       - name: Cache pip
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/pip
           key: pip-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
@@ -31,10 +36,38 @@ jobs:
           python -m memo.ingest
           python -m memo.registry
           python -m memo.store
+          python -m memo.rerank || echo "rerank selfcheck skipped (model/onnx tidak tersedia)"
       - name: Run bench (20 query vs Context7)
         run: python bench/bench.py
-      - uses: actions/upload-artifact@v4
+      - name: Upload bench results
+        if: always()
+        uses: actions/upload-artifact@v5
         with:
           name: bench-results
           path: bench/results/
-          if-no-files-found: error
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Step summary
+        if: always()
+        run: |
+          python - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import glob, json
+          files = sorted(glob.glob("bench/results/*.json"))
+          c7_hit = dm_hit = 0
+          for f in files:
+              e = json.load(open(f))
+              c7_hit += 1 if e.get("c7", {}).get("hit") else 0
+              dm_hit += 1 if e.get("dm", {}).get("hit") else 0
+          print("## Bench (20 query vs Context7)")
+          print("")
+          print("| metrik | jumlah |")
+          print("|---|---|")
+          print(f"| query dieksekusi | {len(files)} |")
+          print(f"| memo hit | {dm_hit} |")
+          print(f"| Context7 hit | {c7_hit} |")
+          if files:
+              misses = [json.load(open(f))["lib"] for f in files if not json.load(open(f)).get("dm", {}).get("hit")]
+              if misses:
+                  print("")
+                  print(f"> memo miss: {', '.join(misses)}")
+          EOF

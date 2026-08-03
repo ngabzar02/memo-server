@@ -1,9 +1,11 @@
 # State Swarm Benchmark (live — hanya O yang menulis)
 
-- state: `BUILDING` (CI build-cache 66 lib; baseline bench = R4 client: hit@5 28% (5/18), resolve 22/22, 6/22 kosong, latency 2.93s — lihat report-R4.md)
-- round terakhir: R2 (MCP langsung daemon HTTP 2026-08-03)
+- state: `CI-READY` (test.yml hijau; build-cache 66 lib jalan di CI 30830835491; bench-heavy siap dispatch)
+- baseline bench = R4 client: hit@5 28% (5/18), resolve 22/22, 6/22 kosong, latency 2.93s — lihat report-R4.md
+- round terakhir: R4 (client MCP, 2026-08-03) | target 40%
 - skor terakhir: resolve 94% (33/35), docs hit@5 21% (3/14) | target 40%
 - target: docs hit@5 >= 40%
+- CATATAN 2026-08-03: bench.yml (CI auto, hit=keyword substring, bukan client MCP) memberi memo 16/20, c7 20/20 — INFORMAL, bukan skor resmi; skor resmi hanya bench-heavy (run_bench.py, path fragment, client MCP)
 
 ## Open issues
 - [ ] pydantic hanya 8 chunk dari docs.pydantic.dev (dugaan: navigasi crawler dangkal) @R

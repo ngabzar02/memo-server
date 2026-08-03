@@ -48,7 +48,7 @@ Jangan: ubah src/memo/ logika produksi tanpa task terpisah; tulis secret; jalank
 | 1 — setup CI + pytest offline | 2026-08-03 | test.yml | push 452ce48 | run1 30830374007 FAIL (pip: annotate>=1 tak ada, PyPI max 0.4.2) → fix 5f9a231; run3 30830835435 ✓ 25 passed/1 deselected/5 xfail (gagal step summary: heredoc pecah) → fix 2ad9cb4 (scripts/ci-summary*.py); run4 30830835435 ✓ hijau | 0 fail | PASS |
 | 2 — bench informal (bench.py, keyword-hit) | 2026-08-03 | bench.yml | push 5f9a231 | 30830513662 ✓ memo 16/20, c7 20/20 — INFORMAL (bukan skor resmi, lihat bench/state.md) | n/a | INFO |
 | 3 — build-cache 66 lib | 2026-08-03 | cache.yml | push | 30830835491 (in_progress saat log ini) | semua lib OK | BELUM |
-| 4 — bench resmi R5 (run_bench.py) | — | bench-heavy.yml | dispatch | belum dijalankan | hit@5 ≥ 40 | — |
+| 4 — bench resmi R5 (run_bench.py) | 2026-08-03 | bench-heavy.yml | dispatch 30831118510 | ✓ bench jalan (145s), ✗ GATE 39% < 40% (exit 1); memo 7/18 vs c7 8/18; resolve 22/22; 0 kosong; report-R5.md | hit@5 ≥ 40 | FAIL (selisih 1 poin) |
 
 ## 5. Alur operasi dari ponsel (sesi utama)
 

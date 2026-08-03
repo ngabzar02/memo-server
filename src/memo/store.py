@@ -96,14 +96,15 @@ def add_chunks(conn: sqlite3.Connection, lib_id: str, ver: str, chunks: list[dic
     tetap tersimpan + searchable; vec lama utk path itu dihapus, chunk lain
     yang tak disentuh mempertahankan vec-nya)."""
     assert embeddings is None or len(chunks) == len(embeddings), "chunks/embeddings length mismatch"
-    for i, ch in enumerate(chunks):
-        old = conn.execute(
-            "SELECT id FROM chunks WHERE lib_id=? AND path=?", (lib_id, ch["path"])
-        ).fetchall()
-        for (oid,) in old:  # ganti versi lama utk path yang sama saja
+    paths = {c["path"] for c in chunks}
+    for path in paths:  # hapus versi lama sekali di awal — bukan per chunk,
+        for (oid,) in conn.execute(  # kalau per chunk: 1 file llms (100+ chunk
+            "SELECT id FROM chunks WHERE lib_id=? AND path=?", (lib_id, path)  # per path) saling menghapus
+        ).fetchall():
             conn.execute("DELETE FROM chunks_fts WHERE rowid=?", (oid,))
             conn.execute("DELETE FROM chunks_vec WHERE rowid=?", (oid,))
             conn.execute("DELETE FROM chunks WHERE id=?", (oid,))
+    for i, ch in enumerate(chunks):
         cur = conn.execute(
             "INSERT INTO chunks (lib_id, ver, path, title, text, fetched_at) "
             "VALUES (?,?,?,?,?,datetime('now'))",

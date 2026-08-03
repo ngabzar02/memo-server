@@ -252,10 +252,8 @@
     "latest_ver": ""
   },
   "express": {
-    "repo": "expressjs/express",
     "docs_url": "https://expressjs.com",
-    "trust": 95.0,
-    "latest_ver": ""
+    "trust": 95
   },
   "sqlalchemy": {
     "repo": "sqlalchemy/sqlalchemy",
@@ -276,10 +274,8 @@
     "latest_ver": ""
   },
   "litestar": {
-    "repo": "litestar-org/litestar",
-    "docs_url": "https://docs.litestar.dev",
-    "trust": 95.0,
-    "latest_ver": ""
+    "docs_url": "https://docs.litestar.dev/latest/",
+    "trust": 95
   },
   "pydantic": {
     "repo": "pydantic/pydantic",

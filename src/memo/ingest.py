@@ -194,8 +194,8 @@ def ingest_lib(docs_url: str, deadline: float | None = None,
     for candidate in (f"{base}/llms-full.txt", f"{base}/llms.txt"):
         # probe pendek: llms.txt kecil; 404/slow = langsung ke sumber berikut.
         # deadline absolute: probe yg lama mencuri budget crawl.
-        text = fetch_text(candidate, timeout=6)
-        if not text or _looks_404(text):
+        text = _fetch_llms(candidate)
+        if not text:
             continue
         pages = parse_llms(text)
         if not pages:
@@ -219,6 +219,24 @@ def ingest_lib(docs_url: str, deadline: float | None = None,
         if crawled:
             return crawled, True
     return ingest_docs(base), True
+
+
+def _fetch_llms(url: str, timeout: float = 6) -> str | None:
+    """Probe llms.txt/llms-full.txt: WAJIB plain text. Sphinx/RTD/GitHub Pages
+    mengembalikan 404-page HTML dgn status 200 (litestar 396 char, django
+    llms-full 53KB) — kalau tidak difilter, 1 chunk sampah masuk korpus."""
+    try:
+        r = httpx.get(url, timeout=timeout, follow_redirects=True,
+                      headers={"User-Agent": "memo/1.0"})
+    except httpx.HTTPError:
+        return None
+    if r.status_code != 200:
+        return None
+    if "text/html" in r.headers.get("content-type", "") or r.text.lstrip().startswith("<"):
+        return None
+    if _looks_404(r.text):
+        return None
+    return r.text
 
 
 def _looks_404(text: str) -> bool:

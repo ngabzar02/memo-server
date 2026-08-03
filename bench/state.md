@@ -1,8 +1,8 @@
 # State Swarm Benchmark (live — hanya O yang menulis)
 
-- state: `IDLE`
-- round terakhir: R0 (subprocess bench 2026-08-02, sebelum sistem MCP-langsung)
-- skor terakhir: resolve 100%, docs hit@5 11% (2/18) | C7 baseline 86%/28%
+- state: `BUILDING` (warmup korpus 5 lib)
+- round terakhir: R2 (MCP langsung daemon HTTP 2026-08-03)
+- skor terakhir: resolve 94% (33/35), docs hit@5 21% (3/14) | target 40%
 - target: docs hit@5 >= 40%
 
 ## Open issues

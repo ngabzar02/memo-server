@@ -1,6 +1,6 @@
 # State Swarm Benchmark (live — hanya O yang menulis)
 
-- state: `R5-DONE` (bench resmi pertama di CI: 39% < gate 40%; build-cache 66 lib masih jalan)
+- state: `R5-DONE` (auto-update ci-poll 2026-08-04) (bench resmi pertama di CI: 39% < gate 40%; build-cache selesai — DB 73 lib)
 - baseline bench = R4 client: hit@5 28% (5/18), resolve 22/22, 6/22 kosong, latency 2.93s — lihat report-R4.md
 - round terakhir: R5 (client MCP via CI, 2026-08-03): hit@5 39% (7/18), resolve 100% (22/22), 0 kosong, docs median 1,956 ms — report-R5.md
 - skor terakhir: docs hit@5 39% (7/18) | target 40% | c7 44% (8/18)

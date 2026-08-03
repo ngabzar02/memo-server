@@ -12,8 +12,6 @@ API diverifikasi dari src/memo/registry.py:
 
 import json
 
-import pytest
-
 import memo.registry as registry
 
 

@@ -188,7 +188,9 @@ def ingest_lib(docs_url: str, deadline: float | None = None,
     ponytail: serial fetch; deadline None = tak terbatas (warmup)."""
     base = docs_url.rstrip("/")
     if deadline is None:
-        deadline = time.monotonic() + 60
+        # warmup/CLI: tak terbatas (cap 200 chunk masih berlaku). Sebelumnya 60s
+        # -> import 40s + probe 12s meninggalkan ~8s crawl (litestar 1 chunk).
+        deadline = float("inf")
     for candidate in (f"{base}/llms-full.txt", f"{base}/llms.txt"):
         # probe pendek: llms.txt kecil; 404/slow = langsung ke sumber berikut.
         # deadline absolute: probe yg lama mencuri budget crawl.

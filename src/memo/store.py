@@ -21,6 +21,17 @@ DEFAULT_DB = str(Path.home() / ".local" / "share" / "memo" / "docs.db")
 MAX_TOKENS = 3000  # cap context sent to model
 
 
+def norm_path(p: str) -> str:
+    """R10/L2-1: bentuk kanonik utk dedupe/compare — strip locale default en
+    (/en/x ≡ /x), ekstensi .html, dan slash di ujung."""
+    p = p.strip()
+    p = re.sub(r"^/?en(?=$|/)", "", p, count=1)
+    p = p.rstrip("/")
+    if p.endswith(".html"):
+        p = p[:-5]
+    return p
+
+
 def connect(db_path: str | None = None) -> sqlite3.Connection:
     path = Path(db_path or DEFAULT_DB)
     path.parent.mkdir(parents=True, exist_ok=True)  # fresh install / CI: dir belum ada
@@ -55,6 +66,16 @@ def init(conn: sqlite3.Connection) -> None:
         conn.commit()
     except sqlite3.OperationalError:
         pass  # kolom sudah ada
+    try:  # migrasi: R10 — cap chunk per lib (override default per-tier)
+        conn.execute("ALTER TABLE libs ADD COLUMN cap INTEGER DEFAULT 0")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # kolom sudah ada
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS crawl_state (
+            lib_id TEXT PRIMARY KEY, docs_url TEXT, seen TEXT, queue TEXT,
+            updated_at TEXT)"""
+    )
     conn.execute(
         """CREATE TABLE IF NOT EXISTS chunks (
             id INTEGER PRIMARY KEY AUTOINCREMENT, lib_id TEXT, ver TEXT,
@@ -109,6 +130,48 @@ def drop_lib(conn: sqlite3.Connection, lib_id: str) -> None:
     conn.execute("DELETE FROM chunks_fts WHERE lib_id=?", (lib_id,))
     conn.execute("DELETE FROM chunks_vec WHERE lib_id=?", (lib_id,))
     conn.execute("DELETE FROM libs WHERE id=?", (lib_id,))
+    conn.execute("DELETE FROM crawl_state WHERE lib_id=?", (lib_id,))
+    conn.commit()
+
+
+def prune_chunks(conn: sqlite3.Connection, lib_id: str, keep_paths: set[str]) -> None:
+    """R10/L2-2: hapus chunk lib yg path-nya tidak ada di set ter-norm (stale:
+    versi lama, halaman .html ganda, locale non-en yg tersapu deny-path)."""
+    rows = conn.execute("SELECT id, path FROM chunks WHERE lib_id=?", (lib_id,)).fetchall()
+    norm = {p: norm_path(p) for p in keep_paths}
+    for cid, path in rows:
+        if norm_path(path) not in norm.values():
+            conn.execute("DELETE FROM chunks_fts WHERE rowid=?", (cid,))
+            conn.execute("DELETE FROM chunks_vec WHERE rowid=?", (cid,))
+            conn.execute("DELETE FROM chunks WHERE id=?", (cid,))
+    conn.commit()
+
+
+def get_crawl_state(conn: sqlite3.Connection, lib_id: str, docs_url: str) -> tuple[set[str], list[str]] | None:
+    """R10/L1-4: state BFS/progress persisten. None jika belum ada atau
+    docs_url berubah (sumber baru -> mulai dari awal)."""
+    r = conn.execute(
+        "SELECT seen, queue FROM crawl_state WHERE lib_id=? AND docs_url=?",
+        (lib_id, docs_url),
+    ).fetchone()
+    if not r:
+        return None
+    return set(json.loads(r[0])), json.loads(r[1])
+
+
+def save_crawl_state(conn: sqlite3.Connection, lib_id: str, docs_url: str, seen: set[str], queue: list[str]) -> None:
+    conn.execute(
+        "INSERT INTO crawl_state (lib_id, docs_url, seen, queue, updated_at) "
+        "VALUES (?,?,?,?,datetime('now')) "
+        "ON CONFLICT(lib_id) DO UPDATE SET docs_url=excluded.docs_url, "
+        "seen=excluded.seen, queue=excluded.queue, updated_at=excluded.updated_at",
+        (lib_id, docs_url, json.dumps(sorted(seen)), json.dumps(queue)),
+    )
+    conn.commit()
+
+
+def clear_crawl_state(conn: sqlite3.Connection, lib_id: str) -> None:
+    conn.execute("DELETE FROM crawl_state WHERE lib_id=?", (lib_id,))
     conn.commit()
 
 
@@ -231,7 +294,16 @@ def search(conn: sqlite3.Connection, lib_id: str, query: str, k: int = 5, query_
         out.sort(key=lambda h: h["_ver"] != version)  # ver cocok paling atas
     for h in out:
         h.pop("_ver", None)
-    return out[:k]
+    # R10/L2-3: dedupe retrieval — satu halaman per path ter-norm (lokal /en/
+    # dan .html hilang), skor tertinggi menang (out sudah urut skor turun).
+    best: dict[str, float] = {}
+    unique = []
+    for h in out:
+        pk = norm_path(h["path"])
+        if pk not in best:
+            best[pk] = h["score"]
+            unique.append(h)
+    return unique[:k]
 
 
 def _fts_ranks(conn: sqlite3.Connection, lib_id: str, fts_query: str, limit: int = 20) -> list[int]:
@@ -247,7 +319,7 @@ def get_lib(conn: sqlite3.Connection, lib_id: str) -> dict | None:
     if not r:
         return None
     cols = ["id", "name", "repo", "docs_url", "trust", "latest_ver", "versions",
-            "full", "etag", "last_check", "recrawl_at"]
+            "full", "etag", "last_check", "recrawl_at", "cap"]
     return dict(zip(cols, r))
 
 
@@ -295,6 +367,18 @@ def _demo() -> None:
     assert get_versions(conn, "flask") == ["3.1.0", "2.3.0"]
     hits2 = search(conn, "flask", "flask.route (decorator)", k=2)  # FTS5 escaping
     assert hits2, f"FTS5 escaping failed: {hits2}"
+    assert norm_path("/en/intro/") == "/intro" and norm_path("en/x.html") == "/x"
+    same = [{"path": "en/api.md", "title": "API", "text": "same text"},
+            {"path": "/api.md", "title": "API", "text": "same text"}]
+    add_chunks(conn, "flask", "3.1.0", same, None)
+    dedup = search(conn, "flask", "same text", k=5)
+    assert len(dedup) <= 1, f"L2-3 dedupe failed: {dedup}"
+    prune_chunks(conn, "flask", {"intro.md"})
+    assert all(c["path"] == "intro.md" for c in search(conn, "flask", "Flask", k=10)), "prune failed"
+    save_crawl_state(conn, "flask", "https://x", {"a", "b"}, ["c"])
+    assert get_crawl_state(conn, "flask", "https://x") == ({"a", "b"}, ["c"])
+    assert get_crawl_state(conn, "flask", "https://other") is None, "docs_url change must reset"
+    assert get_lib(conn, "flask")["cap"] == 0
     print(f"SELFCHECK store: PASS ({len(hits)} hits, top={hits[0]['title']})")
 
 

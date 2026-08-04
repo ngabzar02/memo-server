@@ -197,6 +197,22 @@ def test_get_docs_empty_query_explicit_response(monkeypatch, tmp_path):
 
 # --- A1+C: ingest 0 halaman -> full=0 + guidance (bukan [] senyap) ----------
 
+def test_get_docs_generic_query_guidance(monkeypatch, tmp_path):
+    """R10/L4-6: query generik ('docs') / pendek -> guidance, bukan chunk
+    acak & tanpa memicu ingest."""
+    conn = _server_conn(monkeypatch, tmp_path)
+    store.upsert_lib(conn, {"id": "flask", "name": "Flask", "repo": "pallets/flask",
+                            "docs_url": "https://flask.palletsprojects.com",
+                            "trust": 95.0, "latest_ver": "3.1.0",
+                            "versions": json.dumps(["3.1.0"])})
+    monkeypatch.setattr(server, "_embeddings", lambda: _FakeEmbed(P))
+    monkeypatch.setattr(server.registry, "resolve", lambda *a, **k: [])
+    monkeypatch.setattr(server, "_rerank", lambda q, hits, top_n=10: hits)
+    out = server.get_docs("flask", "docs")
+    assert out and out[0]["title"] == "Guidance"
+    out2 = server.get_docs("flask", "xy")
+    assert out2 and out2[0]["title"] == "Guidance"
+
 def test_get_docs_ingest_empty_guidance(monkeypatch, tmp_path):
     """A1+C: lib baru yg ingest-nya 0 halaman (astro: anti-bot/SPA) -> full
     dikoreksi ke 0 (dulu sandera full=1) + respon guidance, BUKAN [] senyap."""
@@ -210,7 +226,7 @@ def test_get_docs_ingest_empty_guidance(monkeypatch, tmp_path):
     monkeypatch.setattr(server.registry, "version_etag", lambda *a, **k: ("", "", []))
     monkeypatch.setattr(server.registry, "docs_etag", lambda *a, **k: None)
     monkeypatch.setattr(server, "_rerank", lambda q, hits, top_n=10: hits)
-    monkeypatch.setattr(server.ingest, "ingest_lib", lambda *a, **k: ([], True))
+    monkeypatch.setattr(server.ingest, "ingest_lib", lambda *a, **k: ([], True, set()))
     out = server.get_docs("astro", "hooks")
     assert out and out[0]["title"] == "Guidance"
     assert store.get_lib(conn, "astro")["full"] == 0  # re-ingest di call berikutnya

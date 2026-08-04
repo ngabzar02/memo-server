@@ -153,3 +153,40 @@ def test_search_version_soft_and_prefers(tmp_db):
     hits = store.search(tmp_db, "flask", "flask route", k=5, version="3.1.0")
     assert hits[0]["path"] == "new.md"   # ver cocok di atas
     assert {h["path"] for h in hits} == {"new.md", "base.md"}  # '' tetap ikut
+
+
+def test_search_dedupes_norm_path(tmp_db):
+    """R10/L2-3: retrieval dedupe — '/en/api.md' & '/api.md' = satu halaman
+    (locale en di-strip norm_path), skor tertinggi menang."""
+    _lib(tmp_db)
+    store.add_chunks(tmp_db, "flask", "3.1.0", [
+        {"path": "en/api.md", "title": "A", "text": "unique route thing"},
+        {"path": "/api.md", "title": "A", "text": "unique route thing"},
+        {"path": "other.md", "title": "O", "text": "different text"},
+    ])
+    hits = store.search(tmp_db, "flask", "unique route thing", k=5)
+    assert len(hits) == 1 and hits[0]["path"] in ("en/api.md", "/api.md")
+
+
+def test_prune_chunks_removes_stale(tmp_db):
+    """R10/L2-2: prune_chunks membuang chunk yg path ter-norm-nya tidak ada
+    di keep (stale .html ganda, locale non-en, dll)."""
+    _lib(tmp_db)
+    store.add_chunks(tmp_db, "flask", "3.1.0", [
+        {"path": "/x.html", "title": "X", "text": "stale html twin"},
+        {"path": "/de/x", "title": "X", "text": "stale locale"},
+        {"path": "/keep", "title": "K", "text": "keep me"},
+    ])
+    store.prune_chunks(tmp_db, "flask", {"/keep"})
+    rows = tmp_db.execute("SELECT path FROM chunks WHERE lib_id='flask'").fetchall()
+    assert rows == [("/keep",)]
+
+
+def test_crawl_state_persist_and_reset(tmp_db):
+    """R10/L1-4: crawl_state disimpan & dipulihkan; docs_url berubah -> reset
+    (mulai dari awal)."""
+    store.save_crawl_state(tmp_db, "flask", "https://x.dev", {"a", "b"}, ["c"])
+    assert store.get_crawl_state(tmp_db, "flask", "https://x.dev") == ({"a", "b"}, ["c"])
+    assert store.get_crawl_state(tmp_db, "flask", "https://other.dev") is None
+    store.clear_crawl_state(tmp_db, "flask")
+    assert store.get_crawl_state(tmp_db, "flask", "https://x.dev") is None

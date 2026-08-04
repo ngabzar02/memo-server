@@ -169,10 +169,9 @@ def test_sitemap_locs_parses_urlset_and_index():
     assert ingest._sitemap_locs("not xml") == []
 
 
-def test_ingest_sitemap_skips_existing_and_follows_index(monkeypatch):
-    """D6/I10: sitemap-index ditelusuri satu tingkat; halaman yg sudah ter-chunk
-    (existing) tidak di-fetch; path chunk = URL ter-normalisasi; bahasa non-EN
-    (de/) dibuang via _path_allowed."""
+def test_collect_locs_follows_index_and_denies_noise(monkeypatch):
+    """R10/L2-4: sitemap-index ditelusuri satu tingkat; halaman bahasa non-EN
+    (de/) dan noise (blog/artikel tanggal, feeds) dibuang via _path_allowed."""
     sitemaps = {
         "https://docs.astro.build/sitemap-index.xml":
             '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
@@ -184,32 +183,42 @@ def test_ingest_sitemap_skips_existing_and_follows_index(monkeypatch):
             '<url><loc>https://docs.astro.build/de/api/</loc></url></urlset>',
     }
     monkeypatch.setattr(ingest, "_fetch_llms", lambda url, timeout=6: sitemaps.get(url))
-    calls = []
-    monkeypatch.setattr(ingest, "ingest_docs", lambda url, timeout=20:
-                        calls.append(url) or [{"path": url, "title": "T", "text": "body"}])
-    out, complete = ingest._ingest_sitemap(
-        "https://docs.astro.build", deadline=float("inf"),
-        existing={"https://docs.astro.build/en/getting-started"}, query="")
-    assert complete is True
-    assert [c["path"] for c in out] == ["https://docs.astro.build/en/api"]
-    assert calls == ["https://docs.astro.build/en/api/"]
+    locs = ingest._collect_locs(
+        sitemaps["https://docs.astro.build/sitemap-index.xml"], None,
+        "https://docs.astro.build", deadline=float("inf"))
+    assert locs == ["https://docs.astro.build/en/getting-started/",
+                    "https://docs.astro.build/en/api/"]
+    assert ingest._path_allowed("https://duckdb.org/2021/10/13/windowing.html", "https://duckdb.org/") is False
+    assert ingest._path_allowed("https://x.dev/feeds/atom.xml", "https://x.dev/") is False
 
 
-def test_ingest_lib_llms_respects_existing_and_uses_url_path(monkeypatch):
-    """I10/I13: llms branch — path chunk = URL ter-normalisasi (bukan
-    'title (url)'); halaman existing (incl. dup URL dalam satu run) tidak
-    di-fetch ulang."""
-    monkeypatch.setattr(ingest, "_fetch_llms",
-                        lambda url, timeout=6:
-                        "- [Intro](https://x.dev/intro.html)\n"
-                        "- [API](https://x.dev/api/)\n"
-                        "- [Dup](https://x.dev/api/)\n"
-                        if url.endswith("llms.txt") else None)
+def test_ingest_lib_llms_union_sitemap_skips_existing(monkeypatch):
+    """R10/L1-1: llms + sitemap UNION — halaman llms semua diproses; sitemap
+    hanya menambah halaman yg belum ada di llms; existing dihormati; path
+    chunk = URL ter-norm (locale en di-strip)."""
+    monkeypatch.setattr(ingest, "_fetch_parallel", lambda urls, timeout=4: {
+        "llms-full": None,
+        "llms": "- [Intro](https://x.dev/en/intro.html)\n- [API](https://x.dev/api/)\n",
+        "sitemap-index": None,
+        "sitemap": '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+                   '<url><loc>https://x.dev/api/</loc></url>'
+                   '<url><loc>https://x.dev/extra/</loc></url></urlset>',
+    })
     calls = []
     monkeypatch.setattr(ingest, "ingest_docs", lambda url, timeout=20:
                         calls.append(url) or [{"path": url, "title": "T", "text": "b"}])
-    out, complete = ingest.ingest_lib("https://x.dev", deadline=float("inf"),
-                                      existing={"https://x.dev/intro"})
+    out, complete, visited = ingest.ingest_lib(
+        "https://x.dev", deadline=float("inf"),
+        existing={"https://x.dev/intro"}, query="")
     assert complete is True
-    assert [c["path"] for c in out] == ["https://x.dev/api"]  # intro di-skip
-    assert calls == ["https://x.dev/api/"]                     # dup URL tidak di-fetch
+    assert [c["path"] for c in out] == ["https://x.dev/api", "https://x.dev/extra"]
+    assert calls == ["https://x.dev/api/", "https://x.dev/extra/"]  # intro & dup skip
+    assert visited == {"https://x.dev/api", "https://x.dev/extra"}
+
+
+def test_ingest_lib_deadline_expired_partial(monkeypatch):
+    """R10: deadline sudah habis saat probe selesai -> parsial (complete=False)
+    tanpa chunk, server lanjut di call berikutnya."""
+    monkeypatch.setattr(ingest, "_fetch_parallel", lambda urls, timeout=4: {k: None for k in urls})
+    out, complete, visited = ingest.ingest_lib("https://x.dev", deadline=float("-inf"))
+    assert out == [] and complete is False and visited == set()

@@ -6,6 +6,7 @@ Usage: memo  (stdio MCP server, registered via uv tool install)
 import json
 import logging
 import os
+import re
 import sqlite3
 import sys
 import threading
@@ -43,6 +44,9 @@ def _guidance(library_id: str, query: str, reason: str) -> list[dict[str, Any]]:
                     "'resolve_library_id' with the official package name (e.g. 'flask', 'nextjs')."),
         "ingest": ("Documentation could not be fetched (site may be SPA/anti-bot). "
                    "Try again later or use a different library."),
+        "query": ("Query is too short or generic to retrieve useful docs. "
+                  "Ask something specific, e.g. 'error handling middleware' or "
+                  "'pagination in REST API'."),
     }
     t = texts.get(reason, reason)
     return [{"id": "guidance", "path": "", "title": "Guidance",
@@ -186,17 +190,23 @@ def _embed_async(lib_id: str, ver: str, chunks: list[dict]) -> None:
     """I1/D1: embed + vec di background thread (daemon) SETELAH response FTS
     terkirim — 622ms/chunk di ARM tidak muat budget 30s. add_chunks UPSERT
     per-path: baris FTS-only diganti baris vec; request berikutnya memakai
-    vec (hybrid best-effort). Gagal embed = log, FTS tetap melayani."""
-    try:
-        embs = _embed_all([c["text"] for c in chunks])
-        conn = store.connect()
+    vec (hybrid best-effort). R10/L4-1: retry 1x (model load pertama kali
+    bisa gagal utk thread; call berikutnya berhasil)."""
+    for attempt in range(2):
         try:
-            store.add_chunks(conn, lib_id, ver, chunks, embs)
-        finally:
-            conn.close()
-        log.info("vec: %s %d chunk ter-embed", lib_id, len(chunks))
-    except Exception as e:  # noqa: BLE001
-        log.warning("vec embed gagal %s: %s", lib_id, str(e)[:100])
+            embs = _embed_all([c["text"] for c in chunks])
+            conn = store.connect()
+            try:
+                store.add_chunks(conn, lib_id, ver, chunks, embs)
+            finally:
+                conn.close()
+            log.info("vec: %s %d chunk ter-embed", lib_id, len(chunks))
+            return
+        except Exception as e:  # noqa: BLE001
+            if attempt == 0:
+                log.warning("vec embed gagal %s (retry): %s", lib_id, str(e)[:100])
+            else:
+                log.warning("vec embed gagal %s: %s", lib_id, str(e)[:100])
 
 
 @mcp.tool()
@@ -240,6 +250,17 @@ def get_docs(library_id: str, query: str, version: str | None = None) -> list[di
 _REQUEST_BUDGET = 30.0
 
 
+_GENERIC_QUERY_RE = re.compile(
+    r"^(docs?|api|usage|documentation|guide|how|what|why|help|overview|library|package|install|example)s?$", re.I)
+
+
+def _query_guidance(library_id: str, query: str) -> bool:
+    """R10/L4-6: query terlalu pendek (< 3 char) atau generik -> guidance,
+    alih-alih 10 chunk acak (membangunkan ingest untuk apa-apa)."""
+    q = query.strip()
+    return len(q) < 3 or bool(_GENERIC_QUERY_RE.match(q))
+
+
 def _get_docs(library_id: str, query: str, version: str | None = None,
               deadline: float | None = None) -> list[dict[str, Any]]:
     t0 = time.monotonic()
@@ -250,6 +271,11 @@ def _get_docs(library_id: str, query: str, version: str | None = None,
                        "q": query, "ver": version or "", "ms": 0,
                        "reason": "empty_query", "top": []})
         return []
+    if _query_guidance(library_id, query):
+        _log_activity({"t": time.time(), "tool": "get_docs", "lib": library_id,
+                       "q": query, "ver": version or "", "ms": 0,
+                       "reason": "generic_query", "top": []})
+        return _guidance(library_id, query, "query")
     conn = store.connect()
     lib = store.get_lib(conn, library_id)
     ingested = 0  # I20: jumlah chunk yang masuk di call ini (utk activity log)
@@ -311,9 +337,10 @@ def _get_docs(library_id: str, query: str, version: str | None = None,
         # query-miss ditangani di bawah, dgn cooldown 1 jam).
         existing = {ingest.norm_path(r[0]) for r in conn.execute(
             "SELECT path FROM chunks WHERE lib_id=?", (library_id,))}
-        chunks, complete = ingest.ingest_lib(
-            lib.get("docs_url") or f"https://{lib.get('repo','')}",
-            deadline=crawl_deadline, existing=existing, query=query)
+        docs_url = lib.get("docs_url") or f"https://{lib.get('repo','')}"
+        chunks, complete, visited = ingest.ingest_lib(
+            docs_url, deadline=crawl_deadline, existing=existing, query=query,
+            cap_override=int(lib.get("cap") or 0), conn=conn, lib_id=library_id)
         _mark_recrawled(conn, library_id)  # I9: cooldown mulai SETELAH crawl selesai
         if not chunks:
             conn.execute("UPDATE libs SET full=? WHERE id=?", (1 if ingest.is_full(complete, len(chunks)) else 0, library_id))
@@ -324,7 +351,8 @@ def _get_docs(library_id: str, query: str, version: str | None = None,
                                "reason": "ingest_empty", "top": []})
                 return _guidance(library_id, query, "ingest")
         else:
-            chunks = chunks[:200]  # cap: 200 embed ~3 menit di ARM; cukup utk top docs
+            # R10/L1-2: cap hard 200 DIBUANG — cap via kolom libs.cap (default
+            # per-tier di ingest: llms 300 / sitemap 400 / BFS 300).
             ingested = len(chunks)
             if deadline is None:
                 # warmup/CI (tanpa budget): embed penuh utk release cache
@@ -337,8 +365,20 @@ def _get_docs(library_id: str, query: str, version: str | None = None,
                 store.add_chunks(conn, library_id, ver, chunks)
                 threading.Thread(target=_embed_async,
                                  args=(library_id, ver, chunks), daemon=True).start()
+            if complete:
+                # R10/L2-2: pruning — chunk stale (path yg tak ada di hasil
+                # ingest penuh: .html ganda duckdb, locale non-en astro, dll)
+                # dibuang; visited = path yg baru saja di-chunk.
+                store.prune_chunks(conn, library_id, visited)
             conn.execute("UPDATE libs SET full=? WHERE id=?", (1 if ingest.is_full(complete, len(chunks)) else 0, library_id))
             conn.commit()
+        # R10/L4-2: has_vec dicek ULANG setelah ingest (warmup embed sinkron ->
+        # vec langsung terpakai; MCP path -> baris vec muncul di call berikutnya)
+        if not has_vec:
+            has_vec = conn.execute("SELECT 1 FROM chunks_vec WHERE lib_id=? LIMIT 1",
+                                   (library_id,)).fetchone() is not None
+            if has_vec:
+                query_vec = [float(x) for x in list(_embeddings().embed([query]))[0]]
         hits = store.search(conn, library_id, query, k=10, query_vec=query_vec,
                             version=version or "")
     # A2: query-miss pd lib lengkap -> 1x re-crawl dgn kata kunci query
@@ -347,15 +387,18 @@ def _get_docs(library_id: str, query: str, version: str | None = None,
             and _recrawl(conn, library_id, force=True):
         existing = {ingest.norm_path(r[0]) for r in conn.execute(
             "SELECT path FROM chunks WHERE lib_id=?", (library_id,))}
-        chunks, complete = ingest.ingest_lib(
-            lib.get("docs_url") or f"https://{lib.get('repo','')}",
-            deadline=crawl_deadline, existing=existing, query=query)
+        docs_url = lib.get("docs_url") or f"https://{lib.get('repo','')}"
+        chunks, complete, visited = ingest.ingest_lib(
+            docs_url, deadline=crawl_deadline, existing=existing, query=query,
+            cap_override=int(lib.get("cap") or 0), conn=conn, lib_id=library_id)
         _mark_recrawled(conn, library_id)  # I9
         if chunks:
             ingested = len(chunks)
             store.add_chunks(conn, library_id, ver, chunks)
             threading.Thread(target=_embed_async,
                              args=(library_id, ver, chunks), daemon=True).start()
+            if complete:
+                store.prune_chunks(conn, library_id, visited)
             conn.execute("UPDATE libs SET full=? WHERE id=?",
                          (1 if ingest.is_full(complete, len(chunks)) else 0, library_id))
             conn.commit()

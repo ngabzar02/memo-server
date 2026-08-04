@@ -299,14 +299,17 @@ def _crawl(start_url: str, deadline: float, existing: set[str] | None = None,
             if not batch:
                 break
             for (url, n), (text, html) in zip(batch, ex.map(page, [u for u, _ in batch])):
-                if not text:
-                    continue
-                if n not in existing:
+                # R11/T2: link diekstrak dari html WALAU text kosong (landing
+                # page nav-only/JS) — chunking di-skip, discovery BFS tetap jalan
+                # (sqlalchemy: homepage mati, /en/20/ tertutup tanpa ini).
+                if n not in existing and text:
                     title = re.sub(r"^#+\s*", "", text.splitlines()[0])[:80] if text.splitlines() else url
                     for c in chunk_text(text):
                         out.append({"path": n, "title": title, "text": c})
                     if len(out) >= cap:
                         break
+                if not html:
+                    continue
                 # link internal; relatif ke HALAMAN INI (bukan base) -> path benar
                 nxt = []
                 for href in re.findall(r'href="([^"#?]+)', html):
@@ -327,7 +330,9 @@ def _crawl(start_url: str, deadline: float, existing: set[str] | None = None,
 
 def _fetch_parallel(urls: dict[str, str], timeout: float = 4) -> dict[str, str | None]:
     """R10/L1-3: probe sumber (llms-full/llms/sitemap-index/sitemap) PARALEL —
-    dulu serial 6+6+5+5s dari budget ~28s (R11: probe serial = akar B2/B3)."""
+    dulu serial 6+6+5+5s dari budget ~28s (R11: probe serial = akar B2/B3).
+    Key dgn URL kosong ('' dari root==base) di-skip."""
+    urls = {k: u for k, u in urls.items() if u}
     with ThreadPoolExecutor(max_workers=4) as ex:
         futs = {k: ex.submit(_fetch_llms, u, timeout=timeout) for k, u in urls.items()}
         return {k: f.result() for k, f in futs.items()}
@@ -419,11 +424,17 @@ def ingest_lib(docs_url: str, deadline: float | None = None,
         deadline = float("inf")
     existing = {norm_path(e) for e in (existing or set())}  # I10: bentuk path ter-norm
     cap = cap_override or 400
+    u_parsed = up.urlparse(base)
+    root = f"{u_parsed.scheme}://{u_parsed.netloc}"
     texts = _fetch_parallel({
         "llms-full": f"{base}/llms-full.txt",
         "llms": f"{base}/llms.txt",
         "sitemap-index": f"{base}/sitemap-index.xml",
         "sitemap": f"{base}/sitemap.xml",
+        # R11/T2: sitemap juga bisa berada di ROOT domain padahal docs di subpath
+        # (duckdb: docs_url=https://duckdb.org/docs, sitemap ada di root).
+        "root-sitemap-index": f"{root}/sitemap-index.xml" if root != base else "",
+        "root-sitemap": f"{root}/sitemap.xml" if root != base else "",
     })
     if time.monotonic() > deadline:  # deadline habis saat probe -> parsial, lanjut call berikut
         return [], False, set()
@@ -434,13 +445,17 @@ def ingest_lib(docs_url: str, deadline: float | None = None,
             url = f"{base}/llms-full.txt" if texts["llms-full"] else f"{base}/llms.txt"
             chunks = ingest_docs(url)
             return chunks, True, {c["path"] for c in chunks}
-        locs = _collect_locs(texts["sitemap-index"], texts["sitemap"], base, deadline)
+        locs = _collect_locs(
+            texts.get("sitemap-index") or texts.get("root-sitemap-index"),
+            texts.get("sitemap") or texts.get("root-sitemap"), base, deadline)
         llms_norm = {norm_path(p["url"]) for p in pages}
         extra = [l for l in locs if norm_path(l) not in llms_norm]
         ordered = [p["url"] for p in pages] + extra
         out, complete = _ingest_pages(ordered, base, deadline, existing, cap, query)
         return out, complete, {c["path"] for c in out}
-    locs = _collect_locs(texts["sitemap-index"], texts["sitemap"], base, deadline)
+    locs = _collect_locs(
+        texts.get("sitemap-index") or texts.get("root-sitemap-index"),
+        texts.get("sitemap") or texts.get("root-sitemap"), base, deadline)
     if locs:
         out, complete = _ingest_pages(locs, base, deadline, existing, cap, query)
         return out, complete, {c["path"] for c in out}

@@ -121,7 +121,7 @@
   },
   "pandas": {
     "repo": "pandas-dev/pandas",
-    "docs_url": "https://pandas.pydata.org/docs/user_guide/io.html",
+    "docs_url": "https://pandas.pydata.org/docs",
     "trust": 95.0,
     "latest_ver": ""
   },

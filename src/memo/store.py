@@ -248,6 +248,14 @@ def search(conn: sqlite3.Connection, lib_id: str, query: str, k: int = 5, query_
     vec_drop: set[int] = set()
     if fts_and:
         ranked.extend(_fts_ranks(conn, lib_id, fts_and))
+        # R11/T1: OR SELALU difusi (bukan hanya saat AND kosong) — halaman yg
+        # memakai istilah beda dari query (pandas arrays.dtypes, django
+        # querysets) tetap masuk di peringkat lebih dalam; RRF menjaga AND unggul.
+        seen = set(ranked)
+        for cid in _fts_ranks(conn, lib_id, fts_or):
+            if cid not in seen:
+                ranked.append(cid)
+                seen.add(cid)
     if query_vec is not None:
         vec_hits = conn.execute(
             "SELECT rowid, distance FROM chunks_vec WHERE lib_id=? AND embedding MATCH ? AND k=?",

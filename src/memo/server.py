@@ -158,7 +158,7 @@ def _get_reranker():
     return _reranker or None
 
 
-def _rerank(query: str, hits: list[dict[str, Any]], top_n: int = 10) -> list[dict[str, Any]]:
+def _rerank(query: str, hits: list[dict[str, Any]], top_n: int = 20) -> list[dict[str, Any]]:
     """Skor ulang top-N hits dgn cross-encoder (query,doc) -> urut ulang.
     Fast path: <2 hits atau reranker off -> tanpa perubahan."""
     r = _get_reranker()
@@ -326,7 +326,7 @@ def _get_docs(library_id: str, query: str, version: str | None = None,
         vec = _embeddings().embed([query])
         query_vec = [float(x) for x in list(vec)[0]]  # numpy float32 -> float, utk json.dumps
     crawl_deadline = deadline - 2 if deadline else None  # FTS instan: sisakan utk index+search
-    hits = store.search(conn, library_id, query, k=10, query_vec=query_vec,
+    hits = store.search(conn, library_id, query, k=20, query_vec=query_vec,
                         version=version or "")
     # A2: re-crawl umur (docs berubah tanpa versi berubah) utk lib penuh;
     # lib baru / ingest parsial (full=0) tetap di jalur lama.
@@ -379,7 +379,7 @@ def _get_docs(library_id: str, query: str, version: str | None = None,
                                    (library_id,)).fetchone() is not None
             if has_vec:
                 query_vec = [float(x) for x in list(_embeddings().embed([query]))[0]]
-        hits = store.search(conn, library_id, query, k=10, query_vec=query_vec,
+        hits = store.search(conn, library_id, query, k=20, query_vec=query_vec,
                             version=version or "")
     # A2: query-miss pd lib lengkap -> 1x re-crawl dgn kata kunci query
     # (cooldown 1 jam; crawl prioritaskan URL yg match query).
@@ -402,7 +402,7 @@ def _get_docs(library_id: str, query: str, version: str | None = None,
             conn.execute("UPDATE libs SET full=? WHERE id=?",
                          (1 if ingest.is_full(complete, len(chunks)) else 0, library_id))
             conn.commit()
-            hits = store.search(conn, library_id, query, k=10,
+            hits = store.search(conn, library_id, query, k=20,
                                 query_vec=query_vec, version=version or "")
     hits = _rerank(query, hits)
     # I20: query-miss pd lib lengkap direkam eksplisit (docker/react top:[])
@@ -411,7 +411,7 @@ def _get_docs(library_id: str, query: str, version: str | None = None,
                    "n_chunks": ingested,
                    "top": [h["path"] for h in hits[:5]],
                    **({"event": "query_miss"} if not hits and has_chunks and full else {})})
-    return store.trim_to_tokens(hits)
+    return store.trim_to_tokens(hits)[:10]  # R11/T1: rerank dari pool 20, kembalikan 10 terbaik
 
 
 def _docs_changed(conn: sqlite3.Connection, library_id: str) -> bool:
@@ -534,6 +534,7 @@ def _build_cache(limit: int | None = None) -> None:
         # R11: build = artifact komprehensif (ukuran tak dibatasi) — cap chunk
         # per lib dilonggarkan; deadline None (build) tetap membatasi per-page.
         conn.execute("UPDATE libs SET cap=? WHERE id=?", (2_000_000, name))
+        conn.commit()  # WAJIB: tanpa commit, txn write menggantung -> lib lain SQLITE_BUSY
         try:
             _get_docs(name, "overview usage documentation")
             ok += 1

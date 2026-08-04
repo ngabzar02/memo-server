@@ -132,7 +132,9 @@ def memo_phases(client: MCPClient, name: str, query: str) -> dict:
     resolve, rerr, rms, rnote = memo_call(client, "resolve_library_id",
                                           {"library_name": name, "query": query},
                                           RESOLVE_TIMEOUT)
-    resolve_id = resolve[0]["id"] if resolve else None
+    # Hardening: id kandidat harus str (MCP schema get_docs menolak int;
+    # beberapa kali resolve mengembalikan id numerik -> bench crash).
+    resolve_id = str(resolve[0]["id"]) if resolve and isinstance(resolve[0], dict) else None
     docs = []
     if resolve_id:
         docs, derr, dms, dnote = memo_call(client, "get_docs",

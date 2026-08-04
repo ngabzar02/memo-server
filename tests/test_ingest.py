@@ -14,8 +14,6 @@ API diverifikasi dari src/memo/ingest.py:
 
 from pathlib import Path
 
-import pytest
-
 from memo import ingest
 
 FIXTURES = Path(__file__).parent / "fixtures"

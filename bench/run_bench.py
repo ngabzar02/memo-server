@@ -123,7 +123,6 @@ def memo_call(client: MCPClient, method: str, args: dict,
             if attempts >= 2:
                 return None, f"{type(e).__name__} x{attempts}", ms, None
             client.respawn()  # respawn once, then report failure
-            note = f"respawned after {type(e).__name__}"
     # pragma: no cover
 
 

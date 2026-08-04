@@ -14,7 +14,6 @@ import time
 
 import pytest
 
-import memo.registry as registry
 import memo.server as server
 import memo.store as store
 
@@ -276,7 +275,7 @@ def test_pick_cache_release_skips_stale_manual():
 def test_get_docs_live_smoke(monkeypatch, tmp_path):
     """Smoke live (bukan di CI): get_docs untuk lib alias dengan network.
     Jalankan: pytest -m network."""
-    conn = _server_conn(monkeypatch, tmp_path)
+    _server_conn(monkeypatch, tmp_path)
     monkeypatch.setattr(server, "_embeddings", lambda: _FakeEmbed(P))
     out = server.get_docs("flask", "routing")
     assert out  # chunks non-kosong bila network hidup

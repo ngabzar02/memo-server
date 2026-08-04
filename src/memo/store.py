@@ -10,9 +10,9 @@ Hybrid rank fusion: normalize BM25 score and cosine similarity to [0,1], sum.
 """
 
 import json
-import os
 import re
 import sqlite3
+import zlib
 from pathlib import Path
 
 import sqlite_vec
@@ -96,17 +96,52 @@ def init(conn: sqlite3.Connection) -> None:
 
 # I15/D15: migrasi ber-version — PRAGMA user_version (0 = sebelum framework ini).
 # Tambah entry baru utk skema berubah; jangan ubah entry lama.
-_MIGRATIONS: dict[int, str] = {}
+_MIGRATIONS: dict[int, str] = {
+    # L3-2: simhash 64-bit per chunk utk deteksi near-dup saat ingest.
+    1: "ALTER TABLE chunks ADD COLUMN simhash INTEGER",
+    # L3-3: hitungan cek stabil berturut-turut (interval adaptif).
+    2: "ALTER TABLE libs ADD COLUMN stable INTEGER DEFAULT 0",
+}
+
+
+def simhash64(text: str) -> int:
+    """L3-2: 64-bit simhash (Charikar) zero-dep. Token 3+ alnum -> bobot vektor
+    64-bit (crc32 deterministik + salt 32-bit tinggi); bit > 0 = 1. hash() Python
+    TIDAK dipakai: random per-proses (PYTHONHASHSEED). Deteksi near-dup:
+    Hamming distance <= _SIMHASH_DIST = duplikat konten (locale/versi/.html)."""
+    v = [0] * 64
+    for w in re.findall(r"[A-Za-z0-9_]{3,}", text.lower()):
+        lo = zlib.crc32(w.encode("utf-8"))
+        hi = zlib.crc32(("s" + w).encode("utf-8"))
+        h = lo | (hi << 32)
+        for i in range(64):
+            v[i] += 1 if (h >> i) & 1 else -1
+    out = 0
+    for i in range(64):
+        out |= (1 if v[i] > 0 else 0) << i
+    # SQLite INTEGER signed 64-bit: bit 63 set -> konversi ke negatif.
+    # bit_count/XOR bekerja identik pada representasi dua-komplemen.
+    return out - (1 << 64) if out >= (1 << 63) else out
+
+
+_SIMHASH_DIST = 6      # hamming <= 6 bit = near-dup (terukur: 1 kata beda = 5,
+                       # konten beda total = 23; ambang 3 terlalu ketat)
+_SIMHASH_MINLEN = 300  # chunk pendek: simhash tidak stabil -> tidak di-cek
+
+
+def _near_dup(sim: int, others: list[int]) -> bool:
+    return any((sim ^ o).bit_count() <= _SIMHASH_DIST for o in others)
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
     ver = conn.execute("PRAGMA user_version").fetchone()[0]
-    while ver in _MIGRATIONS:
-        for stmt in _MIGRATIONS[ver].split(";"):
+    for target in sorted(_MIGRATIONS):
+        if target <= ver:
+            continue
+        for stmt in _MIGRATIONS[target].split(";"):
             if stmt.strip():
                 conn.execute(stmt)
-        ver += 1
-        conn.execute(f"PRAGMA user_version={ver}")
+        conn.execute(f"PRAGMA user_version={target}")
         conn.commit()
 
 
@@ -190,6 +225,23 @@ def add_chunks(conn: sqlite3.Connection, lib_id: str, ver: str, chunks: list[dic
     tetap tersimpan + searchable; vec lama utk path itu dihapus, chunk lain
     yang tak disentuh mempertahankan vec-nya)."""
     assert embeddings is None or len(chunks) == len(embeddings), "chunks/embeddings length mismatch"
+    # L3-2: filter near-dup SEBELUM delete variants — chunk yang kontennya
+    # ~identik (hamming <= 3) dengan chunk existing di lib yg sama di-skip
+    # (locale astro hi/zh, pasangan .html/.md duckdb). Simhash di-cache ke
+    # existing_sims agar chunk berikutnya dalam batch juga ter-filter.
+    existing_sims = [r[0] for r in conn.execute(
+        "SELECT simhash FROM chunks WHERE lib_id=? AND simhash IS NOT NULL", (lib_id,))]
+    keep_chunks: list[dict] = []
+    keep_embs: list[list[float] | None] = []
+    for i, ch in enumerate(chunks):
+        sim = simhash64(ch["text"]) if len(ch["text"]) >= _SIMHASH_MINLEN else 0
+        if sim and _near_dup(sim, existing_sims):
+            continue
+        keep_chunks.append(ch)
+        keep_embs.append(embeddings[i] if embeddings else None)
+        if sim:
+            existing_sims.append(sim)
+    chunks, embeddings = keep_chunks, keep_embs
     vpaths = set()  # A8: hapus versi lama + path-variants (.html/slash) sekali
     for ch in chunks:  # di awal — bukan per chunk,
         vpaths |= _path_variants(ch["path"])  # kalau per chunk: 1 file llms (100+ chunk
@@ -201,10 +253,11 @@ def add_chunks(conn: sqlite3.Connection, lib_id: str, ver: str, chunks: list[dic
             conn.execute("DELETE FROM chunks_vec WHERE rowid=?", (oid,))
             conn.execute("DELETE FROM chunks WHERE id=?", (oid,))
     for i, ch in enumerate(chunks):
+        sim = simhash64(ch["text"]) if len(ch["text"]) >= _SIMHASH_MINLEN else 0
         cur = conn.execute(
-            "INSERT INTO chunks (lib_id, ver, path, title, text, fetched_at) "
-            "VALUES (?,?,?,?,?,datetime('now'))",
-            (lib_id, ver, ch["path"], ch["title"], ch["text"]),
+            "INSERT INTO chunks (lib_id, ver, path, title, text, fetched_at, simhash) "
+            "VALUES (?,?,?,?,?,datetime('now'),?)",
+            (lib_id, ver, ch["path"], ch["title"], ch["text"], sim),
         )
         cid = cur.lastrowid
         conn.execute(
@@ -387,6 +440,31 @@ def _demo() -> None:
     assert get_crawl_state(conn, "flask", "https://x") == ({"a", "b"}, ["c"])
     assert get_crawl_state(conn, "flask", "https://other") is None, "docs_url change must reset"
     assert get_lib(conn, "flask")["cap"] == 0
+    # L3-2: simhash deterministik + near-dup terdeteksi (beda 1 kata).
+    long_text = ("Flask routing maps HTTP methods to view functions. The route decorator "
+                 "registers a function for a URL pattern and method. When a request "
+                 "matches, Flask calls the view with the request context and arguments "
+                 "extracted from the path. View functions return a response object or "
+                 "string that Flask converts to an HTTP response. This mechanism powers "
+                 "everything from simple endpoints to blueprints with prefixes and "
+                 "subdomains, and is documented across the routing and views chapters. ")
+    a = simhash64(long_text)
+    b = simhash64(long_text)
+    c = simhash64("FastAPI supports path operations, dependency injection, async routes, "
+                  "websockets, background tasks, and OpenAPI generation out of the box. "
+                  "Its typing system drives request validation and automatic docs, while "
+                  "middleware, exception handlers, and dependencies compose into "
+                  "testable applications across dozens of chapters of guides and recipes. "
+                  "This text shares almost no vocabulary with the routing paragraph above. ")
+    assert a == b != 0 and (a ^ a).bit_count() == 0
+    assert (a ^ c).bit_count() > _SIMHASH_DIST, "teks beda jauh harus beda simhash"
+    near = [{"path": "similar.md", "title": "T", "text": long_text},
+            {"path": "already.md", "title": "T", "text": long_text.replace("HTTP methods", "HTTP verb")}]
+    add_chunks(conn, "flask", "3.1.0", near, None)
+    lines = conn.execute("SELECT path FROM chunks WHERE lib_id='flask'").fetchall()
+    paths = [r[0] for r in lines]
+    assert "similar.md" in paths, f"L3-2 chunk valid ter-filter: {paths}"
+    assert "already.md" not in paths, f"L3-2 near-dup tidak ter-filter: {paths}"
     print(f"SELFCHECK store: PASS ({len(hits)} hits, top={hits[0]['title']})")
 
 

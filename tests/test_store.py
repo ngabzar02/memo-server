@@ -10,8 +10,6 @@ API diverifikasi dari src/memo/store.py:
 
 import json
 
-import pytest
-
 import memo.store as store
 
 Z = [0.0] * 384          # 384-dim, norm 0 (tidak dipakai utk MATCH)
@@ -190,3 +188,30 @@ def test_crawl_state_persist_and_reset(tmp_db):
     assert store.get_crawl_state(tmp_db, "flask", "https://other.dev") is None
     store.clear_crawl_state(tmp_db, "flask")
     assert store.get_crawl_state(tmp_db, "flask", "https://x.dev") is None
+
+
+def test_simhash_deterministic_and_near_dup(tmp_db):
+    """L3-2: simhash 64-bit zero-dep — deterministik, beda 1 kata terdeteksi
+    near-dup (<=6 bit), konten beda total jauh; add_chunks menyaring dup."""
+    t = ("Flask routing maps HTTP methods to view functions. The route decorator "
+         "registers a function for a URL pattern and method. When a request "
+         "matches, Flask calls the view with the request context and arguments "
+         "extracted from the path. View functions return a response object or "
+         "string that Flask converts to an HTTP response. This mechanism powers "
+         "everything from simple endpoints to blueprints with prefixes and "
+         "subdomains, and is documented across the routing and views chapters. ")
+    a = store.simhash64(t)
+    assert a == store.simhash64(t) and a != 0
+    assert (a ^ store.simhash64(t.replace("HTTP methods", "HTTP verb"))).bit_count() <= 6
+    far = store.simhash64("FastAPI path operations, dependency injection, async routes, "
+                          "websockets, background tasks, OpenAPI generation, typing driven "
+                          "validation, automatic docs, middleware, exception handlers, and "
+                          "dependencies compose into testable applications across dozens of "
+                          "chapters of guides and recipes with a completely different vocabulary. ")
+    assert (a ^ far).bit_count() > 6
+    store.add_chunks(tmp_db, "flask", "1.0", [{"path": "a.md", "title": "A", "text": t}])
+    store.add_chunks(tmp_db, "flask", "1.0", [{"path": "b.md", "title": "B",
+                                               "text": t.replace("HTTP methods", "HTTP verb")}])
+    rows = tmp_db.execute("SELECT path FROM chunks WHERE lib_id='flask'").fetchall()
+    paths = [r[0] for r in rows]
+    assert paths == ["a.md"], f"L3-2 near-dup harus di-skip: {paths}"

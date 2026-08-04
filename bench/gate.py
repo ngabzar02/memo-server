@@ -57,7 +57,7 @@ def main() -> int:
         print(line)
         return 0 if ok else 1
     print(f"GATE: {line}")
-    print(f"GATE: skor dari output client MCP (report.md run_bench.py), bukan activity.log")
+    print("GATE: skor dari output client MCP (report.md run_bench.py), bukan activity.log")
     return 0 if ok else 1
 
 

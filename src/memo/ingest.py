@@ -286,7 +286,7 @@ def _crawl(start_url: str, deadline: float, existing: set[str] | None = None,
             # ponytail: URL existing TETAP di-fetch (link extraction tetap jalan,
             # tiap call mengeksplorasi 1 tingkat baru — iterative deepening);
             # chunk-nya di-skip supaya tidak duplikat path.
-            batch, frontier = [], []
+            batch = []
             for url in sorted(queue, key=prio):  # prio 0 dulu (ascending)
                 n = norm_path(url)  # A8: dedupe by normalized path (.html/slash)
                 if n in seen:

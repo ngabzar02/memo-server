@@ -7,7 +7,6 @@ Keluaran: JSON per query di _sys/bench/results/ + ringkasan markdown.
 import json
 import os
 import re
-import sys
 import time
 
 import httpx

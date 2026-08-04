@@ -446,10 +446,15 @@ def _docs_changed(conn: sqlite3.Connection, library_id: str) -> bool:
 
 def _maybe_refresh(conn: sqlite3.Connection, lib: dict) -> bool:
     """Freshness: cek versi terbaru periodik (TTL by popularitas: trust>5 = 1d,
-    lain 7d). Versi berubah -> update + full=0 (re-ingest saat dipakai).
+    lain 7d). L3-3: interval ADAPTIF — tiap cek stabil (etag tak berubah)
+    menaikkan `stable`, TTL berlipat (base*2^stable, cap 7d); etag berubah ->
+    reset stable=0 (docs aktif, cek lebih sering lagi).
+    Versi berubah -> update + full=0 (re-ingest saat dipakai).
     Returns True bila versi berubah (perlu re-ingest)."""
     last = lib.get("last_check") or ""
-    ttl = 86400 if float(lib.get("trust", 0)) > 5 else 604800
+    base = 86400 if float(lib.get("trust", 0)) > 5 else 604800
+    stable = min(int(lib.get("stable") or 0), 3)
+    ttl = min(base * (2 ** stable), 604800)
     if last:
         from datetime import datetime
         try:
@@ -466,7 +471,7 @@ def _maybe_refresh(conn: sqlite3.Connection, lib: dict) -> bool:
         # berikutnya re-ingest (chunks lama tetap melayani sampai diganti
         # per-path — DELETE dulu terbukti merugikan: re-ingest gagal deadline
         # 20s -> lib jadi 0 chunk).
-        conn.execute("UPDATE libs SET latest_ver=?, versions=?, full=0 WHERE id=?",
+        conn.execute("UPDATE libs SET latest_ver=?, versions=?, full=0, stable=0 WHERE id=?",
                      (latest, json.dumps(vs or []), lib["id"]))
         conn.commit()
         return True
@@ -477,9 +482,12 @@ def _maybe_refresh(conn: sqlite3.Connection, lib: dict) -> bool:
     et = registry.docs_etag(lib.get("docs_url", ""), old) if lib.get("docs_url") else None
     if et is not None and et != old:
         if old:
-            conn.execute("UPDATE libs SET etag=?, full=0 WHERE id=?", (et, lib["id"]))
+            conn.execute("UPDATE libs SET etag=?, full=0, stable=0 WHERE id=?", (et, lib["id"]))
         else:
             conn.execute("UPDATE libs SET etag=? WHERE id=?", (et, lib["id"]))
+        conn.commit()
+    elif et is not None:
+        conn.execute("UPDATE libs SET stable=stable+1 WHERE id=?", (lib["id"],))
         conn.commit()
     return False
 
@@ -638,7 +646,7 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "--warmup":
         # Pre-ingest: cold fetch di MCP request > 30s timeout client, jadi
         # panaskan cache dari shell dulu: `memo --warmup flask node:fs`
-        emb = _embeddings()
+        _embeddings()  # warm model (panic cold-fetch di request > 30s)
         force = "--force" in sys.argv[2:]
         for name in sys.argv[2:]:
             if name == "--force":

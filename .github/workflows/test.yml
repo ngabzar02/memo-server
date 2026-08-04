@@ -1,53 +1,28 @@
 name: test
-
 on:
   push:
-    paths:
-      - "src/**"
-      - "tests/**"
-      - "pyproject.toml"
-      - ".github/workflows/test.yml"
+  pull_request:
   workflow_dispatch:
-
-permissions:
-  contents: read
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-      - name: Install memo + test deps
-        run: pip install --quiet ".[test]"
-      - name: pytest (offline suite)
-        run: pytest tests/ -m "not network" --junitxml=pytest.xml -rxXs
-      - name: Selfcheck modul (smoke)
+          python-version: '3.11'
+      - name: Install deps + test
+        run: |
+          pip install .[test]
+          pip install ruff
+      - name: Lint (pyflakes F: unused/undefined/format — bukan gaya)
+        run: ruff check -q --select F src tests bench
+      - name: Selfcheck
         run: |
           python -m memo.store
           python -m memo.ingest
           python -m memo.registry
-          python -m memo.rerank || echo "rerank selfcheck skipped (model/onnx tidak tersedia)"
-      - name: Upload pytest log
-        if: always()
-        uses: actions/upload-artifact@v5
-        with:
-          name: pytest-logs
-          path: pytest.xml
-          if-no-files-found: warn
-          retention-days: 14
-      - name: Step summary
-        if: always()
-        run: |
-          if [ -f pytest.xml ]; then
-            python scripts/ci-summary.py pytest.xml >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "pytest.xml tidak ada — pytest tidak sempat menulis hasil." >> "$GITHUB_STEP_SUMMARY"
-          fi
+      - name: Tests
+        run: pytest tests/ -q -m "not network"

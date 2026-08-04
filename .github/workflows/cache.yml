@@ -1,47 +1,41 @@
-name: build-cache
+name: cache
 on:
-  push:
-    branches: [main]
-    paths: ["src/**", "cache-libs.txt", "aliases.json", "builtins.json", "pyproject.toml", ".github/workflows/cache.yml"]
   workflow_dispatch:
-permissions:
-  contents: write
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-env:
-  HF_HOME: $HOME/.hf
-  FASTEMBED_CACHE_PATH: $HOME/.fastembed
-  HF_HUB_DOWNLOAD_TIMEOUT: "120"
-  HF_HUB_DISABLE_PROGRESS_BARS: "1"
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    permissions:
+      contents: write
+    concurrency:
+      group: cache-build
+      cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-      - name: Cache model HF (embed + rerank)
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.hf
-            ~/.fastembed
-            ~/.cache/memo
-          key: hf-${{ hashFiles('pyproject.toml') }}
-      - name: Install memo
-        run: pip install --quiet .
-      - name: Build cache (ingest semua lib + embed penuh)
-        run: memo --build-cache 2>&1 | tee /tmp/build-cache.log
-      - name: Package docs.db
-        run: gzip -k ~/.local/share/memo/docs.db && mv ~/.local/share/memo/docs.db.gz memo-cache.db.gz
-      - name: Publish release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: cache-${{ github.sha }}
-          files: memo-cache.db.gz
-      - name: Step summary
-        if: always()
-        run: python scripts/ci-summary-cache.py /tmp/build-cache.log >> "$GITHUB_STEP_SUMMARY"
+          python-version: '3.11'
+      - name: Install deps
+        run: pip install .
+      - name: Resume from last release
+        run: |
+          mkdir -p ~/.local/share/memo
+          if curl -fLsSL -o /tmp/cache.db.gz \
+              "https://github.com/${{ github.repository }}/releases/download/cache-build/memo-cache.db.gz"; then
+            gzip -d -c /tmp/cache.db.gz > ~/.local/share/memo/docs.db
+            echo "resume: DB restorasi ($(ls -lh ~/.local/share/memo/docs.db | awk '{print $5}'))"
+          else
+            echo "resume: release pertama, mulai dari nol"
+          fi
+      - name: Build cache
+        run: python -m memo.server --build-cache
+      - name: Gzip DB
+        run: gzip -kf ~/.local/share/memo/docs.db
+      - name: Upload release
+        run: |
+          set -euo pipefail
+          gh release delete cache-build --repo "${{ github.repository }}" --yes >/dev/null 2>&1 || true
+          gh release create cache-build "$HOME/.local/share/memo/docs.db.gz" \
+            --repo "${{ github.repository }}" \
+            --title "memo cache (build $(date -u +%Y%m%dT%H%M))" \
+            --notes "Pre-built docs.db dari --build-cache di GitHub Actions. Unduh di ponsel: memo --fetch-cache" >/dev/null
+          echo "release: https://github.com/${{ github.repository }}/releases/tag/cache-build"

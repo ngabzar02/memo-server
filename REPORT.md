@@ -1,285 +1,231 @@
-# MASTER PLAN MEMO MCP v2 — Menuju "Sempurna" (Versus Context7)
+# MASTER PLAN MEMO MCP v3 — PENUTUPAN TOTAL GAP (Update Ronde 11)
 
-Tanggal: 2026-08-04. Disusun dari: benchmark 9 ronde + 3 riset paralel sub-agent (swarm):
-1. Riset mendalam Context7 (source npm @upstash/context7-mcp@3.2.5, SDK, docs, blog upstash)
-2. Best practices RAG-docs 2025-2026 (chunking, hybrid, embedding, rerank, llms.txt, freshness, MCP, evaluasi)
-3. Audit teknis kode memo (server/registry/store/ingest/rerank, DB live, tests)
+Tanggal: 2026-08-04 (revisi). Dibangun dari: swarm 4 sub-agent paralel (audit kode
+`src/memo/*`, audit runtime `docs.db`, riset web best-practices 2025-26, riset
+referensi Context7 asli) + verifikasi silang antar temuan.
 
-Semua klaim bertag `[VERIFIED]` (bukti file:line atau URL) / `[INFERRED]` / `[ASUMSI]`.
-
----
-
-## 0. RANGKUMAN EKSEKUTIF
-
-Memo saat ini: MCP lokal, 3 tools, FTS+vec hybrid (TAPI vektor KOSONG di prod → FTS murni),
-rerank ONNX, crawl on-demand, guidance message. Skor ronde 9: resolve A+, anti-hal A+,
-stability A+, **relevance B−** (4/8 lib bermasalah: fastapi, duckdb, react, astro).
-
-**Temuan paling fatal (audit kode):** `chunks_vec` = **0 baris** di docs.db produksi
-(server.py:227 embed tiap request sia-sia) — fitur "hybrid RRF" yang di-klaim tidak pernah
-berfungsi di jalur MCP server. Ini artinya sebagian besar skor benchmark selama ini berasal
-dari FTS+rerank saja.
-
-Context7 asli hanya punya **2 tools** (resolve-library-id, query-docs), server-side rerank
-memangkas konteks 65% (9.7k→3.3k token), trustScore berbasis organisasi, benchmarkScore
-LLM-jury, version pinning, refresh adaptif popularity-based, anti-injection pipeline.
-Backend parsing/crawling/vector mereka private — memo bisa menang di transparansi, offline,
-dan tanpa rate limit.
-
-Target v2: menjadi MCP docs-RAG lokal TERBAIK dengan standar setara context7: retrieval
-yang benar-benar hybrid (vec aktif), freshness adaptif, version-aware, evaluasi berkelanjutan.
+Semua klaim bertag `[VERIFIED]` (file:line / URL / data DB) / `[INFERRED]` / `[ASUMSI]`.
 
 ---
 
-## 1. GAP ANALYSIS — Memo vs Context7 (detail)
+## 0. STATUS TERVERIFIKASI (Ronde 11) — KOREKSI terhadap ronde 10
 
-### 1.1 Gap permukaan (benchmark & dokumentasi)
+| Klaim di R10 | Fakta swarm R11 | Status |
+|---|---|---|
+| `_maybe_refresh` return dibuang (server.py:212) | SALAH — return dipakai (server.py:265-268, fix I5) | klaim basi |
+| oversize >12.000 char dibuang | SALAH — trim memotong (store.py:264-275) + split paragraf (ingest.py:160-185) | klaim basi |
+| crawler query-aware "hanya halaman cocok query" | SETENGAH BENAR — prio() hanya memprioritaskan (ingest.py:239-248); pembatas nyata: cap chunk 200 (server.py:327), probe serial, deadline budget | mekanisme beda |
+| etag mati semua | SETENGAH BENAR — etag sumber versi mati (registry.py:83 selalu `""`), `docs_etag` hidup dgn If-None-Match (registry.py:87-107) | parsial |
+| lock id mentah / cache resolve per-query | SALAH — lock canonical (server.py:68-77, I3), cache by name (registry.py:434-441, I4) | klaim basi |
+| astro content collections (B) | FIXED (R10) | ✅ |
+| tailwind versions (B) | FIXED (R10) | ✅ |
 
-| # | Gap | Memo (sekarang) | Context7 (asli) | Sumber |
-|---|---|---|---|---|
-| G1 | Jumlah tools | 3 (resolve, versions, get_docs) | 2 (resolve-library-id, query-docs) | [VERIFIED] npm mcp@3.2.5 |
-| G2 | `query` di resolve | opsional, hampir tak berpengaruh | wajib, untuk ranking relevansi | [VERIFIED] |
-| G3 | Library ID | slug bebas (`fastapi`) | `/owner/repo` global unik | [VERIFIED] |
-| G4 | Version pinning | `version` param label saja (tidak filter) | `/owner/repo@1.2.3` benar-benar memilih versi docs | [VERIFIED] |
-| G5 | Output | JSON `{id,path,title,text,section_title,tokens,score}` | teks + rerank server-side, server yang putuskan jumlah docs | [VERIFIED] |
-| G6 | Trust | log10(stars/downloads)+llms.txt+penalti fork | trustScore 0-10 org-based + benchmarkScore 0-100 (LLM jury) + Verified badge | [VERIFIED] |
-| G7 | Freshness | etag mati total (etag='' di 21 libs), re-crawl 7 hari kaku | refresh adaptif berbasis popularity + threshold; GitHub Action per push | [VERIFIED] audit + blog |
-| G8 | Self-healing | guidance ada (fake lib, SPA) | guidance + pesan per error (404/429/401) + prompt auth | [VERIFIED] |
-| G9 | Anti-injection | tidak ada | pipeline LLM classifier 2 tahap untuk docs & Skills.md | [VERIFIED] |
-| G10 | Cakupan lib | ~49 alias + resolve ad-hoc | ribuan, community-contributed, verified | [VERIFIED] |
-| G11 | Evaluasi | tidak ada benchmark formal (hanya ronde manual) | benchmarkScore otomatis tiap parse, jury LLM | [VERIFIED] |
-| G12 | Latensi | cold 5-60s (fetch+ingest on-demand) | hosted, API cepat | [VERIFIED] |
+**Gap B1–B5 SEMUA MASIH OPEN di R11.** Skor terakhir (R5): hit@5 39% (7/18) vs
+Context7 44%; target 40% belum tercapai `[VERIFIED — bench/report-R5.md]`.
 
-### 1.2 Gap internal memo (dari audit kode) — yang TIDAK terlihat dari benchmark
-
-| # | Severity | Temuan | Bukti |
-|---|---|---|---|
-| I1 | KRITIS | `chunks_vec` = 0 baris di prod → "hybrid" = FTS murni; embed query tiap request sia-sia (~90ms) | server.py:227, store.py:170-180 |
-| I2 | KRITIS | Lazy singleton `_embeddings`/`_reranker` tanpa lock → 2 request konkuren load model 2× (RAM ~480MB) | server.py:100-128 |
-| I3 | KRITIS | Lock per-lib dipakai ID mentah user (bukan hasil resolve): `next` vs `nextjs`, `go` vs `golang` → lock beda untuk docs sama → double ingest + duplikat korpus (DB: baris tailwind DAN tailwindcss dua-duanya full=1) | server.py:63-65,178 |
-| I4 | KRITIS | `_resolve` cache keyed `(name, query)` → tiap kombinasi query unik = resolve 6-sumber network penuh (~2-3s) di hot path; memori tak terbatas | registry.py:401-407, server.py:216 |
-| I5 | TINGGI | `_maybe_refresh` return value dibuang (server.py:212) — versi baru terdeteksi tapi chunks lama tetap disajikan tanpa penanda | server.py:212 |
-| I6 | TINGGI | ETag conditional-GET mati: `version_etag` tidak pernah pakai `old_etag`, selalu return etag="" | registry.py:76-84 |
-| I7 | TINGGI | `_extract` & `page()` tanpa try/except → HTML aneh dari web → exception propagasi → SELURUH get_docs gagal (bukan fallback) | ingest.py:58-72, 200-211 |
-| I8 | SEDANG | Gagal ingest = silent; re-crawl existing 0 halaman baru tidak ter-log | ingest.py:86-87 |
-| I9 | SEDANG | `_recrawl` tulis `recrawl_at` SEBELUM crawl → crawl gagal tetap bakar cooldown | server.py:86-88 |
-| I10 | SEDANG | llms branch ignore `existing` → re-fetch SEMUA halaman; `c["path"]=f"{title} ({url})"` → title sama → chunk menimpa | ingest.py:281-294 |
-| I11 | SEDANG | Deadline antar-halaman bukan per-fetch; 1 halaman lambat makan 20s | ingest.py:285-287 |
-| I12 | SEDANG | Tidak ada migration framework/FK/indeks `chunks(lib_id)` → full scan di 50k chunk | store.py:42-70 |
-| I13 | SEDANG | Dua konvensi path (URL vs "title (url)") → dedupe tidak konsisten | ingest.py:290 |
-| I14 | SEDANG | `versions_of` panggil 5 ekosistem SERIAL di dalam `_maybe_refresh` (di bawah lock per-lib) → bisa makan ~30s network, meledakkan budget | registry.py:261-269, server.py:336 |
-| I15 | SEDANG | SSRF ringan: docs_url dari npm/PyPI/directory bisa ke localhost; `ingest_docs` fetch URL apa pun | registry.py:161,239; ingest.py:302 |
-| I16 | SEDANG | `_stars_of` tanpa cache + rate limit GitHub anon 60/jam → setelah ~10 resolve semua stars=0, trust turun diam-diam | registry.py:364-375 |
-| I17 | SEDANG | Koneksi sqlite baru per request tanpa close eksplisit; 2 penulis (server+warmup) WAL → SQLITE_BUSY >30s | store.py:24-32 |
-| I18 | SEDANG | CLI rapuh (`--transport` di akhir argv → IndexError); server.py 546 baris multi-tanggung jawab | server.py:525-527 |
-| I19 | SEDANG | Test gap: tidak ada test _recrawl/_maybe_refresh/_crawl/rollback/migrasi/concurrency; network path tak pernah jalan di CI | test_server.py:186 |
-| I20 | SEDANG | Activity log 4 event saja; tidak ada log chunk hasil ingest, fetch gagal, latency embed/rerank, query-miss | bench |
-| I21 | RENDAH | Duplikat path `.html` vs non-.html (duckdb 8/10 hasil duplikat pasangan) | bench ronde 7-8 |
-| I22 | RENDAH | Chunk >12.000 char DIBUANG (store.py:199) — halaman reference besar hilang padahal relevan (menjelaskan G5-fastapi) | store.py:199 |
-| I23 | RENDAH | `get_lib` SELECT * + 11 kolom hardcoded → mismatch diam-diam saat schema berubah | store.py:227-233 |
-| I24 | RENDAH | `json.loads` tanpa try di get_versions → versions korup = crash | store.py:236-238 |
-| I25 | RENDAH | `_docs_changed_cache` race benign (worst case resolve ganda) | server.py:59 |
-| I26 | RENDAH | Dead code/artefak: docs.db.bak 1.8MB + docs.db.cache 37MB; `_fetch_cache` rollback bisa kehilangan tulis terakhir | server.py:473-485 |
-| I27 | INFO | Semua cache in-process hilang saat restart → cold start re-resolve penuh | registry.py |
-| I28 | INFO | `_log_activity` swallow OSError → disk penuh = observability buta | server.py:33-34 |
-| I29 | INFO | Fallback rerank silent: model gagal → FTS-only tanpa kabar (sudah ada log "fallback-rerank" — [VERIFIED] server.py:124-126) | server.py:124-126 |
-
-### 1.3 Akar masalah yang paling berdampak (untuk benchmark)
-
-Fastapi/duckdb/react gagal di get_docs bukan karena ranking jelek, tapi karena **halaman yang
-dibutuhkan tidak pernah masuk korpus** (re-crawl tidak pernah jalan saat cakupan sempit,
-`full=1` dicek dulu, etag mati, llms branch fetch ulang tanpa arah). Astro gagal karena
-crawler tidak pernah menangkap SPA (tidak ada fallback sitemap/headless).
+Fakta runtime DB `[VERIFIED — audit DB]`:
+- 22 libs, **2862 chunks, `chunks_vec` hanya 81 baris (astro saja)** — 5/6 lib B vektor 0
+- fastapi 200 chunk / 8 path (tanpa `/reference/dependencies`); react 87 / 8 (tanpa
+  `/reference/react/*`); duckdb 200 / 27 (11 pasangan duplikat `.html`, unik cuma 16)
+- astro 81 / 10 path tersebar 4 locale (en/hi/zh-cn/zh-tw) — pasangan konten sama
+- `chunks.ver` kosong kecuali astro=7.1.6 & tailwindcss=4.3.3; `libs.etag` kosong 21/22;
+  `full=0` utk astro/docker/prisma/pydantic → re-ingest tiap call
+- FTS5: MATCH `"useEffect"` = 0, `"window_functions"` = 0 di semua lib; `"Depends"` hanya
+  fastapi 2 → korpus memang tidak memuat topik target (coverage, bukan ranking)
+- `queries.json` duckdb#12 (`docs/sql/query_syntax`) & react#10 (`/reference/react/useState`)
+  path-nya TIDAK ada di DB → mustahil hit
+- tailwindcss: 200 chunk termasuk `feeds/atom.xml`, `/showcase`, `/plus/ui-blocks` (noise)
 
 ---
 
-## 2. IDE & DESAIN TARGET — memo v2 "Sempurna"
+## 1. AKAR PENYEBAB TERBUKTI (file:line) — kenapa coverage gagal
 
-### 2.1 Arsitektur target
+**B1–B3 = coverage, bukan ranking (konfirmasi R10, tapi mekanisme dikoreksi):**
 
-```
-┌─ MCP tools (4, bukan 3) ─────────────────────────────┐
-│ resolve_library_id(library_name, query?)             │
-│ get_docs(library_id, query, version?)                │   ← versi benar-benar memfilter
-│ versions(library_id)                                 │
-│ refresh(library_id) [opsional, eksplisit]            │   ← pisahkan update dari search
-└──────────────────────────────────────────────────────┘
-        │  FastMCP + lock per-id-ter-resolve + backpressure
-┌───────▼───────────────┐   ┌──────────────────────────────┐
-│ ingest engine         │   │ retrieval engine             │
-│ • llms.txt > .md pages│   │ FTS5 bm25() ─┐                │
-│   > sitemap > crawl   │   │ vec (sqlite-vec)─┤ RRF k=60  │
-│ • page-level chunking │   │       (harus AKTIF)           │
-│ • 512 tok + overlap 15│   │ rerank bge-reranker-v2-m3     │
-│ • conditional GET+hash│   │ dedupe (path-normalized)      │
-│ • anti-SPA fallback   │   │ trim 3000 tok (potong, bukan │
-│ • SSRF guard          │   │  skip)                        │
-└───────────────────────┘   └──────────────────────────────┘
-        │ persist                        │
-┌───────▼───────────────────────────────▼──────────────────┐
-│ SQLite: schema migrasi PRAGMA user_version; FK; indeks;   │
-│ per-lib: etag, content-hash, fetched_at, version, full,   │
-│ last_check, popularity; WAL; single writer + timeout      │
-└──────────────────────────────────────────────────────────┘
-```
+1. **Cap chunk 200 tercapai sebelum halaman target** `[VERIFIED]` — server.py:327 cap
+   200; fastapi & duckdb PERSIS 200 chunk di DB. Halaman dalam (window_functions,
+   reference/dependencies, useEffect) tidak pernah sempat.
+2. **Probe serial menghabiskan budget** `[VERIFIED]` — ingest.py:303-329 probe
+   llms-full(6s)+llms(6s)+sitemap(5s) berurutan; fastapi (llms 404) & duckdb kehilangan
+   10-18s dari budget ~28s sebelum crawl dimulai.
+3. **full=0 saat complete=False → re-crawl restart dari nol** `[VERIFIED]` —
+   server.py:319-340: chunks>0 tapi deadline habis → full=0 → get_docs berikutnya
+   re-crawl; existing dihormati tapi **state BFS tidak dipersist** → halaman prioritas
+   di-fetch ulang, halaman dalam tidak pernah tercapai.
+4. **Re-crawl full=1 dibatasi query-miss 1×/jam** `[VERIFIED]` — server.py:346-347;
+   selain itu hanya docs_url berubah yang memicu (server.py:263,397).
+5. **react: llms.txt ADA** (react.dev/llms.txt, daftar `/reference/*.md` +
+   `/learn/*.md`) `[VERIFIED — web]` tapi korpus react tidak memuat useEffect →
+   jalur llms tidak pernah dipakai efektif utk react (ingest pertama sebelum fix
+   I10/I13, tanpa re-crawl penuh). duckdb.org juga punya llms.txt; fastapi 404
+   (fallback sitemap/BFS wajib) `[VERIFIED — web]`.
 
-### 2.2 Keputusan desain (dengan alasan + sumber)
+**B4–B5 = duplikat & stale rows:**
+- `norm_path` strip `.html`/trailing slash ADA (ingest.py:28-35, dipakai di jalur
+  ingest) **tapi normalisasi LOCALE TIDAK ADA**; `store.search` TIDAK dedupe path
+  ter-norm (store.py:171-234) `[VERIFIED]`
+- `add_chunks` (store.py:123-156) hanya UPSERT path yang dikunjungi — baris lama
+  (.html, /hi/, locale lain) **tidak pernah di-prune** → 114 chunk .html duckdb &
+  pasangan en/hi astro mengendap permanen `[VERIFIED]`
+- FTS5 rusak sinkron? tidak — FTS sinkron dgn chunks; masalahnya isi korpus itu sendiri.
 
-**D1. Aktifkan vektor (I1).** Embedding untuk SEMUA chunk, termasuk jalur ingest lokal
-(bukan hanya build-cache). Ini prasyarat "hybrid" yang jujur. `[INFERRED]` — dari audit
-store.py; benchmark harus ulang setelah ini karena skor lama FTS-only.
-
-**D2. Idempotent lock key.** Lock dihitung dari id SETELAH resolve (canonical), bukan ID
-mentah user. `next`/`nextjs` → lock sama. `[VERIFIED]` I3.
-
-**D3. Lazy-load dengan lock (thread-safe singleton).** `_embeddings` & `_reranker` pakai
-`threading.Lock` sekali. `[VERIFIED]` I2.
-
-**D4. Resolve cache memisahkan (name) dari (query).** Cache hasil `_resolve(name)` per name
-(6-sumber) TTL ~24-48 jam; `query` hanya untuk rerank/order hasil lokal, TIDAK memicu
-network baru. `[VERIFIED]` I4 + G2.
-
-**D5. Freshness adaptif (ganti I5/I6/I7).** `[VERIFIED]` riset:
-- Conditional GET: `If-None-Match` + `If-Modified-Since` bersamaan; 304 = skip.
-- Validator lemah → **content hash** (simhash 64-bit, Hamming ≤3 bit near-duplicate,
-  strip boilerplate dulu).
-- Re-crawl interval adaptif: perpendek saat berubah, multiplicative backoff saat statis;
-  popularity-based threshold (popular lib = lebih sering dicek).
-- `recrawl_at` baru di-set SETELAH crawl sukses (I9).
-- `_maybe_refresh`: hasil dipakai — update `latest_ver` + tandai chunks lama, jangan buang
-  return value (I5).
-
-**D6. Ingest sumber bertingkat.** `[INFERRED]` dari riset llms.txt:
-1. `llms-full.txt` (satu file, coverage penuh) → 2. `llms.txt` (daftar .md pages, fetch
-   per page, skip `existing`) → 3. `sitemap.xml` (untuk SPA/astro: astro.build pasti punya
-   sitemap) → 4. crawl BFS terbatas. llms branch harus hormati `existing` (I10).
-- Anti-SPA fallback: jika HTML kosong setelah ekstraksi → coba `?output=1` /
-  `?raw=1` / sitemap / headless (puppeteer-core optional, [ASUMSI] berat — jadikan opsional).
-
-**D7. Chunking page-level, 512 token + overlap 15%.** `[VERIFIED]` riset: page-level menang
-e2e (0.648), sweet spot 256-1024, overlap 10-20% (15% terbaik NVIDIA). Ganti 256/50 saat
-ini → 512/75. Normalisasi path sebelum dedupe: strip `.html`, trailing `/` (I21).
-
-**D8. Jangan buang oversize — potong.** `_split_oversize` dipakai untuk chunk >12k char
-sebelum dikirim (I22). `[INFERRED]`.
-
-**D9. Rerank lebih kuat.** Naik dari ms-marco-MiniLM-L6 (baseline lama) ke
-**bge-reranker-v2-m3** (568M, Apache-2.0, multilingual, pilihan open self-host terbaik
-menurut riset). Fallback chain: bge → MiniLM → no-rerank (log). Tetap ONNX quantized 8-bit
-dan evaluasi lift-nya. `[VERIFIED]` riset reranker.
-
-**D10. Embedding upgrade bertahap.** Saat ini bge-small (240MB resident). Target:
-**Qwen3-Embedding-0.6B/4B** (instruction-aware, MRL, 32K ctx, No.1 MTEB multilingual) ATAU
-**bge-m3** (dense+sparse+multi, 8K ctx). Aturan: context-length model > ukuran chunk (model
-512-token memotong chunk 1000 token diam-diam — mxbai warning). 0.6B 4-bit ≈ 5GB RAM
-[ASUMSI]-cek; ukur dulu vs gain, tetap bisa pakai bge-small bila resource kecil.
-`[VERIFIED]` riset.
-
-**D11. Versi sungguhan (G4).** `version` jadi filter nyata di query `search()` (kolom `ver`
-sudah ada). Untuk docs multi-versi di path (numpy `vX.Y`): resolve versi → pilih path.
-Version analyzer sederhana: deteksi `latest/`, `vX.Y/`, `stable/` di URL.
-`[INFERRED]` — meniru context7.
-
-**D12. Guidance diperkaya (G8).** Pesan per kondisi: lib tak dikenal (exist), SPA/gagal
-fetch, versi tidak ada, rate limit, network error, versi docs lebih baru dari index
-("docs updated recently, refresh() or try again"). `[VERIFIED]` pattern context7.
-
-**D13. Trust 2-dimensi (G6).** `trust` (log10 stars/downloads, cache _stars_of dengan TTL +
-pakai data per-source sekaligus untuk hemat rate limit — I16) + `benchmark_score` opsional
-(LLM-jury sekali per lib, disimpan di DB). Keduanya ekspos di resolve output.
-`[INFERRED]` — model context7 yang disederhanakan.
-
-**D14. SSRF guard (I15).** Whitelist skema http(s), blok localhost/private IP/loopback/
-metadata IP (169.254.169.254); validasi host di `ingest_docs` dan `fetch_text`; max size
-resource (mis. 5MB). `[VERIFIED]` I15.
-
-**D15. DB hardening (I12/I17/I23/I24).** `PRAGMA user_version` + migration list;
-`CREATE INDEX chunks(lib_id)`; FTS `lib_id` jadi indexed (content='' dengan external content
-atau setidaknya trigram); FK libs→chunks; satu koneksi writer + timeout; `get_lib` jangan
-SELECT *; `get_versions` try/except. `[VERIFIED]` audit.
-
-**D16. Observability penuh (I20/I28).** Activity log tambah: chunks hasil ingest, fetch
-gagal per URL, latency embed/rerank/query, query-miss (0 hit + alasan), versions check.
-Rotasi log. Jangan swallow OSError.
-
-**D17. Evaluasi berkelanjutan (G11).** `bench/` golden set 100-500 query (nDCG@10 manual +
-LLM-as-judge council) di-commit; jalankan tiap rilis; bandingkan skor antar versi.
-`[VERIFIED]` riset eval.
-
-**D18. CLI & struktur (I18).** `main()` pakai argparse ketat; pisahkan file: `server.py`
-(MCP only), `cli.py` (warmup/cache), `cache.py` (build-cache fetch). Bersihkan artefak
-(docs.db.bak/.cache) (I26).
-
-**D19. Tests (I19).** Tambah unit test: _recrawl, _maybe_refresh, _crawl (mock network),
-rollback cache, migrasi schema, concurrency (lazy-singleton, lock alias), SSRF guard.
-Network path: pytest.mark.network tetap, tapi sediakan make target. Perbaiki docstring basi.
-
-**D20. Anti-injection (G9).** Skor prompt-injection sederhana pada teks docs (deteksi
-"ignore previous instructions"/"system prompt" dalam chunk sebelum embed; buang/tandai).
-`[INFERRED]` — versi mini pipeline context7.
+**Lapis retrieval:**
+- **Vector search nyaris mati**: `_embed_async` (server.py:185-199) gagal hanya di-log,
+  thread daemon mati saat restart → 5/6 lib FTS-only (81/2862 vec) `[VERIFIED]`.
+- has_vec dicek SEBELUM ingest (server.py:296-301) → call pertama selalu FTS-only.
+- Anti-injection: TIDAK ADA implementasi `[VERIFIED — grep src/]`.
+- Golden set formal: TIDAK ADA (hanya 22 query bench manual) `[VERIFIED — bench/]`.
+- Content-hash/simhash near-duplicate: TIDAK ADA `[VERIFIED]`; If-None-Match hanya di
+  `docs_etag` HEAD llms.txt (registry.py:96-100).
 
 ---
 
-## 3. ROADMAP FASE — Urutan Eksekusi
+## 2. RENCANA PERBAIKAN v3 — EMPAT LAPISAN (wajib berurutan, verify tiap lapis)
 
-### Fase 1 — Fondasi kebenaran retrieval (impact terbesar, skor benchmark)
-1. D1: embedding aktif di semua jalur ingest (vec tidak lagi 0) — **prasyarat hybrid**
-2. D2: lock key canonical (perbaiki double-ingest tailwind/tailwindcss dulu)
-3. D3: singleton lock (model load 1×)
-4. D4: cache resolve by name
-5. D7: chunking 512/15% + normalisasi path (I21)
-6. D8: oversize dipotong, tidak dibuang (I22)
-7. Benchmark ulang penuh (ronde 10) → ini baseline baru yang jujur
+> Prinsip tetap: fix akar di fungsi bersama, bukan per-query. Koreksi model:
+> **bge-reranker-v2-m3 / bge-m3 / Qwen3-Embedding TIDAK didukung fastembed**
+> `[VERIFIED — web]` — rekomendasi R10 dibatalkan; pakai yang benar-benar ada
+> (L4-3).
 
-### Fase 2 — Freshness & coverage (perbaiki fastapi/duckdb/react/astro)
-8. D5: conditional GET + content hash + recrawl adaptif (I5/I6/I9)
-9. D6: ingest bertingkat llms-full > llms > sitemap > crawl; llms hormati existing (I10);
-   astro via sitemap
-10. D11: version filter nyata
-11. D12: guidance diperkaya
-12. Benchmark ulang (ronde 11): fastapi OAuth → `/reference/dependencies/`, duckdb →
-    `/sql/window_functions`, react → hooks page, astro → chunk ada
+### Lapisan 1 — Coverage penuh (B1–B3)
 
-### Fase 3 — Kualitas retrieval (naikkan ceiling)
-13. D9: rerank bge-reranker-v2-m3 (ukur lift dulu, golden set)
-14. D10: embedding Qwen3/bge-m3 bila resource cukup
-15. D13: trust 2-dimensi + cache _stars_of
-16. D17: golden set 100-500 query + evaluasi formal
-17. D20: anti-injection mini
+**L1-1. Discovery 3-tier: `llms.txt` → `sitemap.xml` → BFS terkendali.**
+- Jika llms.txt ada → fetch SEMUA URL di dalamnya (prioritas penuh, bukan campur BFS);
+  llms-full.txt bila ada → satu file → chunk page-level.
+- Jika 404 → sitemap.xml → daftar URL; query HANYA memboboti urutan fetch
+  (prio() sudah ada), bukan membatasi jumlah.
+- BFS hanya fallback; hormati robots.txt; budget 300-500 halaman/lib.
+- react/duckdb ter-cover via llms; fastapi wajib sitemap+BFS.
 
-### Fase 4 — Hardening (stabilitas & keamanan)
-18. D14: SSRF guard
-19. D15: DB migration + indeks + FK + single writer
-20. D16: observability lengkap + rotasi log
-21. D18: refactor CLI/struktur file, bersihkan artefak
-22. D19: test suite lengkap
+**L1-2. Cap chunk dinaikkan & per-tier, bukan global 200.**
+- Cap = f(sumber): llms penuh selalu; sitemap ≥ 400; BFS 300-500. Cap saat ini
+  (server.py:327) terbukti memotong di tengah — jadikan parameter per-lib di DB.
 
-### Fase 5 — Polish
-23. D20 lanjut: benchmarkScore LLM-jury opsional
-24. Pack & docs: README cara pakai, konfigurasi, arsitektur
-25. Release v2.0 + benchmark final (ronde 12+)
+**L1-3. Probe paralel (L1-2 lama).** llms-full+llms+sitemap-index+sitemap di-fetch
+konkuren (thread/async), timeout per-probe pendek — jangan 10-18s serial sebelum crawl.
+
+**L1-4. Persist state BFS** per lib (tabel `crawl_state`: seen/queue/visited_at).
+Re-crawl LANJUT dari posisi terakhir, tidak mulai dari 0 (kunci B1-B3 lintas call).
+
+**L1-5. Re-crawl progresif saat coverage belum penuh.** Hapus batas query-miss 1×/jam
+untuk lib `full=0`: izinkan lanjut BFS sampai `is_full` sejati (≥ min halaman, bukan
+min chunk 3). `full=1` hanya saat coverage penuh (L1-5 R10 tetap).
+
+Verify L1: 3 query B1-B3 memunculkan path benar; FTS spot-check `window_functions`>0,
+`useEffect`>0; fastapi `reference/dependencies` masuk.
+
+### Lapisan 2 — Dedupe & kebersihan korpus (B4–B5)
+
+**L2-1. `norm_path` + strip locale.** Pilih satu locale default (en); buang prefix
+`/en/` `/hi/` `/ja/` `/zh-*/` dst utk dedupe + filter non-default saat ingest.
+
+**L2-2. `chunks.path` disimpan TER-NORM** (bukan raw), + **prune stale rows**: setelah
+re-ingest lib, `DELETE` chunk lib tsb yang path-nya tidak dikunjungi call itu
+(bersihkan 114 `.html` duckdb, 31 `/hi/` astro, 4 locale).
+
+**L2-3. Dedupe di retrieval** (store.search): group path ter-norm, ambil score
+tertinggi per group sebelum trim budget. Berlaku seketika, tanpa tunggu re-ingest.
+
+**L2-4. Deny-path noise**: `feeds/`, `/showcase`, `/plus/`, `*.xml` non-sitemap —
+daftar deny umum + per-lib, di `_path_allowed` (ingest.py:15-25).
+
+Verify L2: duckdb 0 pasangan `.html`; astro 1 locale; unit test locale baru
+(saat ini 0 test locale `[VERIFIED — grep tests/]`).
+
+### Lapisan 3 — Freshness & kebenaran versi (L2 R10)
+
+**L3-1. ETag/Last-Modified disimpan per docs source** + If-None-Match; 304 → skip
+fetch, naikkan interval. Bila server tak beri validator → **content hash (simhash
+64-bit, Hamming ≤3 = near-dup)** — tidak ada sama sekali saat ini.
+
+**L3-2. Interval adaptif per popularitas**: threshold umur (hari) dari stars/downloads
+(cache `_stars_of` sudah ada, jangan hit GitHub per call). `recrawl_at` post-crawl
+(sudah I9). Ganti `full=0` yang re-ingest tiap call.
+
+**L3-3. `chunks.ver` diisi saat re-crawl** + verify soft-filter versi (A7) benar
+dengan data ber-version.
+
+Verify L3: `libs.etag` terisi >0; 304 tercatat; lib berubah → re-crawl; lib statis →
+skip.
+
+### Lapisan 4 — Retrieval & kualitas (ceiling)
+
+**L4-1. Embed DIJAMIN selesai**: ganti thread daemon → non-daemon + join saat
+shutdown + retry; backfill vec semua chunk lama (CLI `--warmup --force` / build-cache).
+Target: `chunks_vec > 0` utk SEMUA lib (81/2862 → penuh).
+
+**L4-2. Jujur soal hybrid**: selama lib belum vec, BM25 murni (jangan janji hybrid);
+has_vec dicek SETELAH ingest call pertama, bukan sebelum (pindah posisi cek
+server.py:296-301), atau jalankan embed sinkron untuk lib itu saat ingest pertama.
+
+**L4-3. Model**: tetap `bge-small-en-v1.5` (ada di fastembed, 67MB int8, cocok ARM).
+Rerank opsional: `jina-reranker-v2-base-multilingual` (1.11GB, ADA di fastembed)
+sebagai upgrade dari ms-marco-MiniLM — **ukur lift dulu (L4-4), jangan ganti buta.**
+Jangan install model yang tidak didukung fastembed.
+
+**L4-4. Evaluasi formal**: golden set 30-60 Q&A (WAJIB: B1-B3, query miss R5),
+metrik **set-based hit@5/recall@k** (bukan nDCG saja — LLM konsumsi set, bukan list
+`[VERIFIED — web]`), baseline BM25-only vs hybrid vs rerank; skrip `bench/eval.py`;
+skor tercatat tiap rilis (regression test B1-B3).
+
+**L4-5. Anti-injection mini** (L3-5 R10): regex scan saat ingest ("ignore previous
+instructions", role-switch, `</system>` dsb.) → tandai/buang chunk.
+
+**L4-6. Guidance query jelek** (pola Context7): query < N char / generik ("docs",
+"api") → guidance saran query spesifik, bukan hasil diam-diam jelek.
 
 ---
 
-## 4. KRITERIA "SEMBUNYI" / Definition of Done v2
+## 3. URUTAN EKSEKUSI & VERIFIKASI
 
-- [ ] `chunks_vec` > 0 di prod, RRF benar-benar hybrid (bukan FTS-only)
-- [ ] Benchmark ronde: resolve A+, anti-hal A+, relevance ≥ A− (fastapi/duckdb/react/astro
-      semuanya memunculkan halaman yang benar), stability A+ di 30+ calls
-- [ ] Version param benar-benar memfilter
-- [ ] Tidak ada silent failure: semua kegagalan fetch/ingest/rerank masuk activity.log
-- [ ] Tests: unit suite hijau, termasuk concurrency & SSRF
-- [ ] Golden set: skor evaluasi tercatat dan tidak turun antar versi
-- [ ] verify.sh PASS (sesuai CUI-SYS)
+| # | Langkah | Verify dengan |
+|---|---|---|
+| 1 | L1-1 + L1-3: discovery 3-tier + probe paralel (fastapi, duckdb, react) | 3 query B1-B3 muncul path benar; FTS `useEffect`/`window_functions` > 0 |
+| 2 | L1-2 + L1-4: cap per-tier + persist BFS state | re-crawl lanjut bukan restart; fastapi `reference/dependencies` masuk |
+| 3 | L1-5: re-crawl progresif sampai coverage penuh | `full=1` hanya saat ≥ min halaman; `full=0` lib lanjut BFS tiap call |
+| 4 | L2-1..L2-3: norm+locale, path ter-norm, prune stale, dedupe retrieval | duckdb 0 `.html` ganda; astro 1 locale; unit test locale |
+| 5 | L2-4: deny-path noise | tailwind tanpa atom.xml/showcase |
+| 6 | L3-1..L3-3: etag + simhash + interval adaptif + ver | `libs.etag` > 0; 304 log; `chunks.ver` terisi |
+| 7 | L4-1 + L4-2: embed dijamin + backfill | `chunks_vec > 0` semua lib; BM25 murni jujur selama belum vec |
+| 8 | L4-4: golden set + eval.py | skor baseline BM25 vs hybrid tercatat; B1-B3 di set |
+| 9 | L4-3 (opsional): jina-reranker v2 | lift terukur di eval, tanpa regresi latency |
+| 10 | L4-5 + L4-6: anti-injection + guidance query | docs jahat di-buang/ditandai; query pendek → guidance |
 
 ---
 
-## 5. CATATAN JALAN PINTAS YANG DISENGAJA (untuk diputuskan di sesi eksekusi)
+## 4. DEFINITION OF DONE v3 (semua wajib)
 
-- D9/D10 model baru menambah RAM (bge-reranker 568M + Qwen3-embed bisa 1-2GB+).
-  Jika target device kecil → tetap bge-small + MiniLM rerank, hanya aktifkan vec.
-- Headless browser (astro) opsional & berat; coba sitemap dulu (astro.build punya
-  sitemap-index.xml) — kalau cukup, headless tidak perlu.
-- LanceDB sebagai pengganti sqlite-vec hanya jika chunk > ~100k (sqlite-vec brute-force
-  cukup sampai puluhan ribu vektor) — [VERIFIED] riset.
-- `refresh()` tool eksplisit di Fase 1 opsional; bisa juga internal-only (auto-refresh).
+- [ ] B1: `get_docs(fastapi, "Depends OAuth2")` → `/reference/dependencies/` atau `/tutorial/security/` keluar
+- [ ] B2: `get_docs(duckdb, "window functions RANK OVER")` → `/sql/window_functions` keluar
+- [ ] B3: `get_docs(react, "useEffect")` → `/reference/react/useEffect` / `/learn/synchronizing-with-effects` keluar
+- [ ] B4/B5: 0 duplikat locale/.html di semua hasil; path ter-norm di DB
+- [ ] `chunks_vec > 0` untuk semua lib; tidak ada lib FTS-only diam-diam (log/guidance jika gagal)
+- [ ] `libs.etag` terisi; 304 skip bekerja; simhash fallback ada
+- [ ] `chunks.ver` terisi; version filter memfilter sungguhan
+- [ ] Golden set + eval.py: skor tercatat, tidak turun antar rilis
+- [ ] Tidak ada silent failure: semua kegagalan fetch/ingest/embed tercatat di activity.log
+- [ ] Tests: unit suite hijau (termasuk locale dedupe, prune, anti-injection, cap per-tier)
+- [ ] Benchmark ronde final: resolve 100%, hit@5 ≥ 40% (≥ Context7 44%), 0 kosong
+
+---
+
+## 5. RISIKO & KEPUTUSAN SAAT EKSEKUSI
+
+1. **Waktu ingest naik**: llms+sitemap penuh (300-500 halaman/lib) = menit per lib.
+   Putuskan: background + guidance "sedang meng-index" (rekomendasi) vs sinkron.
+2. **RAM**: jina-reranker-v2 1.1GB hanya jika target device sanggup; default MiniLM
+   (0.08GB). Jangan pakai model non-fastembed.
+3. **react jalur llms**: react.dev/llms.txt berisi `.md` — chunk page-level dari
+   llms-full bila ada; cek ukuran dulu (bisa besar).
+4. **fastapi tanpa llms**: sitemap.xml + BFS — verifikasi sitemap berisi
+   `/reference/dependencies/`.
+5. **Dedupe locale default "en"**: halaman yang HANYA ada di locale non-en akan hilang
+   — catat sebagai keputusan (ADR) bila itu yang dipilih.
+6. **Jangan tiru Context7**: auth/dashboard, `context7.json` per-library, generateDocs
+   dari source — itu biaya ekosistem cloud, bukan perilaku retrieval.
+7. **Tiru Context7**: fase resolve→query (sudah), ID kanonik + pin versi
+   (`/owner/repo@v`, parsial: A7 soft filter), refresh by age+popularity (L3-2),
+   snippet dgn provenance (B: section_title/tokens/score sudah ada), guidance utk
+   query jelek (L4-6).
+8. **SQLite cukup**: sampai ~100k chunk sqlite-vec brute-force memadai; LanceDB hanya
+   jika melewati itu.

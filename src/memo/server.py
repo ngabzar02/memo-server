@@ -531,6 +531,9 @@ def _build_cache(limit: int | None = None) -> None:
         if a:  # docs_url sudah pasti: skip resolve network
             store.upsert_lib(conn, {"id": name, "name": name, "repo": "", "trust": a.get("trust", 95),
                                     "docs_url": a["docs_url"], "latest_ver": "", "versions": "[]"})
+        # R11: build = artifact komprehensif (ukuran tak dibatasi) — cap chunk
+        # per lib dilonggarkan; deadline None (build) tetap membatasi per-page.
+        conn.execute("UPDATE libs SET cap=? WHERE id=?", (2_000_000, name))
         try:
             _get_docs(name, "overview usage documentation")
             ok += 1
@@ -621,6 +624,15 @@ def _fetch_cache(force: bool = False, dry_run: bool = False) -> int:
     return 0
 
 
+def _flag_int(argv: list[str], flag: str) -> int | None:
+    if flag in argv:
+        try:
+            return int(argv[argv.index(flag) + 1])
+        except (IndexError, ValueError):
+            return None
+    return None
+
+
 def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "--warmup":
         # Pre-ingest: cold fetch di MCP request > 30s timeout client, jadi
@@ -666,12 +678,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-def _flag_int(argv: list[str], flag: str) -> int | None:
-    if flag in argv:
-        try:
-            return int(argv[argv.index(flag) + 1])
-        except (IndexError, ValueError):
-            return None
-    return None

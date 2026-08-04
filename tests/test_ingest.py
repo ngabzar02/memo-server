@@ -1,13 +1,15 @@
 """test_ingest — chunk_text (heading + hard-split), filter domain/bahasa,
-deteksi 404-palsu, full flag.
+deteksi 404-palsu, full flag, SSRF guard, sitemap fallback.
 
 API diverifikasi dari src/memo/ingest.py:
-- chunk_text(text, max_tokens=256, overlap=50) ingest.py:69 (SAB-2: cap 4x
+- chunk_text(text, max_tokens=512, overlap=50) ingest.py:69 (SAB-2: cap 4x
   max_tokens utk hard-split via _split_oversize)
 - _path_allowed(url, base_url) ingest.py:18 (SAB-4: netloc sama + tanpa
   segmen bahasa non-EN)
 - _looks_404(text) ingest.py:284
 - is_full(complete, n_chunks, min_chunks=3) ingest.py:28
+- _ssrf_safe(url) ingest.py:87 (I15: blok host internal/metadata)
+- _sitemap_locs / _ingest_sitemap (D6: fallback docs SPA tanpa llms.txt)
 """
 
 from pathlib import Path
@@ -50,13 +52,13 @@ def test_chunk_text_respects_cap():
     text = "\n\n".join(f"Para {i} " + "B." * 400 for i in range(20))
     chunks = ingest.chunk_text(text)
     assert len(chunks) >= 2
-    assert all(len(c) <= 256 * 4 for c in chunks)
+    assert all(len(c) <= ingest.CHUNK_TOKENS * 4 for c in chunks)
 
 
 def test_chunk_text_hard_split_oversize_paragraph():
     """SAB-2: paragraf raksasa di-hard-split, max piece <= 4x max_tokens."""
     chunks = ingest.chunk_text("A." * 100_000)
-    assert all(len(c) <= 256 * 4 for c in chunks)
+    assert all(len(c) <= ingest.CHUNK_TOKENS * 4 for c in chunks)
     assert len(chunks) > 1  # benar-benar terpotong, bukan 1 chunk raksasa
 
 
@@ -132,3 +134,82 @@ def test_llms_filter_skips_non_en_links(tmp_db):
     base = "https://docs.djangoproject.com/"
     assert all(ingest._path_allowed(l["url"], base) for l in links), \
         "link non-EN (pt-br/es) masih lolos ke korpus"
+
+
+def test_ssrf_blocks_internal_hosts():
+    """I15: docs_url berasal npm/pypi (input tak tepercaya) — host internal,
+    loopback, cloud metadata, dan .local MESTI diblok."""
+    assert not ingest._ssrf_safe("http://localhost:8080/docs")
+    assert not ingest._ssrf_safe("http://127.0.0.1/x")
+    assert not ingest._ssrf_safe("http://10.0.0.5/x")
+    assert not ingest._ssrf_safe("http://192.168.1.1/x")
+    assert not ingest._ssrf_safe("http://169.254.169.254/latest/meta-data/")
+    assert not ingest._ssrf_safe("http://172.16.3.9/x")
+    assert not ingest._ssrf_safe("http://0.0.0.0/x")
+    assert not ingest._ssrf_safe("http://foo.local/x")
+    assert not ingest._ssrf_safe("http://[::1]/x")
+    assert ingest._ssrf_safe("https://fastapi.tiangolo.com/")
+    assert ingest._ssrf_safe("https://docs.astro.build/")
+
+
+def test_sitemap_locs_parses_urlset_and_index():
+    """D6: urlset langsung maupun sitemapindex (-> sitemap-*.xml) terparse
+    via stdlib xml.etree (namespace sitemap standar)."""
+    locs = ingest._sitemap_locs(
+        '<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        '<url><loc>https://docs.astro.build/en/getting-started/</loc></url>'
+        '<url><loc>https://docs.astro.build/en/reference/configuration-reference/</loc></url>'
+        "</urlset>")
+    assert locs == ["https://docs.astro.build/en/getting-started/",
+                    "https://docs.astro.build/en/reference/configuration-reference/"]
+    idx = ingest._sitemap_locs(
+        '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        '<sitemap><loc>https://docs.astro.build/sitemap-0.xml</loc></sitemap></sitemapindex>')
+    assert idx == ["https://docs.astro.build/sitemap-0.xml"]
+    assert ingest._sitemap_locs("not xml") == []
+
+
+def test_ingest_sitemap_skips_existing_and_follows_index(monkeypatch):
+    """D6/I10: sitemap-index ditelusuri satu tingkat; halaman yg sudah ter-chunk
+    (existing) tidak di-fetch; path chunk = URL ter-normalisasi; bahasa non-EN
+    (de/) dibuang via _path_allowed."""
+    sitemaps = {
+        "https://docs.astro.build/sitemap-index.xml":
+            '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+            '<sitemap><loc>https://docs.astro.build/sitemap-0.xml</loc></sitemap></sitemapindex>',
+        "https://docs.astro.build/sitemap-0.xml":
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+            '<url><loc>https://docs.astro.build/en/getting-started/</loc></url>'
+            '<url><loc>https://docs.astro.build/en/api/</loc></url>'
+            '<url><loc>https://docs.astro.build/de/api/</loc></url></urlset>',
+    }
+    monkeypatch.setattr(ingest, "_fetch_llms", lambda url, timeout=6: sitemaps.get(url))
+    calls = []
+    monkeypatch.setattr(ingest, "ingest_docs", lambda url, timeout=20:
+                        calls.append(url) or [{"path": url, "title": "T", "text": "body"}])
+    out, complete = ingest._ingest_sitemap(
+        "https://docs.astro.build", deadline=float("inf"),
+        existing={"https://docs.astro.build/en/getting-started"}, query="")
+    assert complete is True
+    assert [c["path"] for c in out] == ["https://docs.astro.build/en/api"]
+    assert calls == ["https://docs.astro.build/en/api/"]
+
+
+def test_ingest_lib_llms_respects_existing_and_uses_url_path(monkeypatch):
+    """I10/I13: llms branch — path chunk = URL ter-normalisasi (bukan
+    'title (url)'); halaman existing (incl. dup URL dalam satu run) tidak
+    di-fetch ulang."""
+    monkeypatch.setattr(ingest, "_fetch_llms",
+                        lambda url, timeout=6:
+                        "- [Intro](https://x.dev/intro.html)\n"
+                        "- [API](https://x.dev/api/)\n"
+                        "- [Dup](https://x.dev/api/)\n"
+                        if url.endswith("llms.txt") else None)
+    calls = []
+    monkeypatch.setattr(ingest, "ingest_docs", lambda url, timeout=20:
+                        calls.append(url) or [{"path": url, "title": "T", "text": "b"}])
+    out, complete = ingest.ingest_lib("https://x.dev", deadline=float("inf"),
+                                      existing={"https://x.dev/intro"})
+    assert complete is True
+    assert [c["path"] for c in out] == ["https://x.dev/api"]  # intro di-skip
+    assert calls == ["https://x.dev/api/"]                     # dup URL tidak di-fetch

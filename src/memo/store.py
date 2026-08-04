@@ -68,7 +68,25 @@ def init(conn: sqlite3.Connection) -> None:
         """CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(
             embedding float[384], lib_id text)"""
     )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_lib ON chunks(lib_id)")
+    _migrate(conn)
     conn.commit()
+
+
+# I15/D15: migrasi ber-version — PRAGMA user_version (0 = sebelum framework ini).
+# Tambah entry baru utk skema berubah; jangan ubah entry lama.
+_MIGRATIONS: dict[int, str] = {}
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    ver = conn.execute("PRAGMA user_version").fetchone()[0]
+    while ver in _MIGRATIONS:
+        for stmt in _MIGRATIONS[ver].split(";"):
+            if stmt.strip():
+                conn.execute(stmt)
+        ver += 1
+        conn.execute(f"PRAGMA user_version={ver}")
+        conn.commit()
 
 
 # --- write ----------------------------------------------------------------
@@ -235,7 +253,12 @@ def get_lib(conn: sqlite3.Connection, lib_id: str) -> dict | None:
 
 def get_versions(conn: sqlite3.Connection, lib_id: str) -> list[str]:
     r = conn.execute("SELECT versions FROM libs WHERE id=?", (lib_id,)).fetchone()
-    return json.loads(r[0]) if r and r[0] else []
+    if not r or not r[0]:
+        return []
+    try:  # I24: json sampah di DB (versi lama) tidak boleh crash versions tool
+        return json.loads(r[0])
+    except ValueError:
+        return []
 
 
 def trim_to_tokens(chunks: list[dict], max_tokens: int = MAX_TOKENS) -> list[dict]:

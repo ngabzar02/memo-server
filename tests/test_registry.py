@@ -148,14 +148,14 @@ def test_alias_versions_enriched_from_ecosystem(monkeypatch):
     ekosistem; latest_ver junk (npm 0.0.3) dikoreksi ke vs[0]."""
     monkeypatch.setattr(registry, "versions_of",
                         lambda name: ["15.4.0", "15.3.0", "15.2.0"])
-    c = registry._resolve("nextjs")[0]
+    c = registry.resolve("nextjs")[0]
     assert json.loads(c["versions"])[:1] == ["15.4.0"]
     assert c["latest_ver"] == "15.4.0"
 
 
 def test_resolve_query_boost(monkeypatch):
     """A4: query memengaruhi ranking — kandidat yg repo/docs_url-nya memuat
-    kata kunci     query naik +0.5 (sebelumnya query diabaikan utk non-builtin)."""
+    kata kunci query naik +0.5 (sebelumnya query diabaikan utk non-builtin)."""
     _resolve_no_network(monkeypatch)
     monkeypatch.setattr(registry, "_enrich", lambda cands, name: None)  # trust statis
     monkeypatch.setattr(registry, "_dir_entry", lambda name: {
@@ -164,7 +164,32 @@ def test_resolve_query_boost(monkeypatch):
     monkeypatch.setattr(registry, "_pypi", lambda name: {
         "repo": "other/helper", "docs_url": "https://example.com",
         "trust": 1.2, "latest_ver": "", "versions": []})
-    out = registry._resolve("webx", query="tiangolo framework")
+    out = registry.resolve("webx", query="tiangolo framework")
     by_repo = {c["repo"]: c["trust"] for c in out}
     assert by_repo["fastapi/fastapi-extra"] == 1.5   # +0.5 boost (docs_url memuat tiangolo)
     assert by_repo["other/helper"] == 1.2            # tak kena boost
+
+
+def test_resolve_cache_by_name_query_boost_per_call(monkeypatch):
+    """I4: cache network by NAME saja (query keluar dari key) — resolve 2 query
+    berbeda utk nama sama hanya 1x network; boost A4 diterapkan per-call di
+    atas cache copy (tidak menumpuk antar query)."""
+    _resolve_no_network(monkeypatch)
+    monkeypatch.setattr(registry, "_enrich", lambda cands, name: None)
+    monkeypatch.setattr(registry, "_dir_entry", lambda name: {
+        "repo": "fastapi/fastapi-extra", "docs_url": "https://fastapi.tiangolo.com",
+        "trust": 1.0, "latest_ver": "", "versions": []})
+    monkeypatch.setattr(registry, "_pypi", lambda name: {
+        "repo": "other/helper", "docs_url": "https://example.com",
+        "trust": 1.2, "latest_ver": "", "versions": []})
+    calls = []
+    orig = registry._resolve
+    monkeypatch.setattr(registry, "_resolve",
+                        lambda *a, **k: calls.append(1) or orig(*a, **k))
+    out1 = registry.resolve("webx", query="tiangolo framework")
+    assert {c["repo"]: c["trust"] for c in out1}["fastapi/fastapi-extra"] == 1.5
+    out2 = registry.resolve("webx", query="helper tool")
+    assert calls == [1], "resolve network dipanggil ulang utk query berbeda (I4)"
+    by = {c["repo"]: c["trust"] for c in out2}
+    assert by["fastapi/fastapi-extra"] == 1.0  # boost query1 tidak membeku di cache
+    assert by["other/helper"] == 1.7           # boost query2 utk call ini saja

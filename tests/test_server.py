@@ -102,6 +102,79 @@ def test_resolve_merges_versions_from_db(monkeypatch, tmp_path):
     assert json.loads(out[0]["versions"]) == ["3.1.0", "2.3.0"]
 
 
+# --- I3: lock key canonical + dedupe libs by docs_url -----------------------
+
+def test_lock_key_canonical_for_alias_same_docs():
+    """I3: tailwind & tailwindcss (alias, docs_url sama) -> key lock SAMA —
+    dua request berbeda nama tidak double-ingest ke docs_url sama."""
+    assert server._lock_key("tailwind") == server._lock_key("tailwindcss")
+    assert server._lock_key("flask") == server._lock_key("flask")  # deterministik
+
+
+def test_lock_key_namespaced_builtin_distinct():
+    assert server._lock_key("py:os") != server._lock_key("node:os")
+
+
+def test_get_docs_merges_lib_by_docs_url(monkeypatch, tmp_path):
+    """I3: resolve('tailwindcss') dgn docs_url yg sudah dipakai 'tailwind' ->
+    merger ke id existing; tidak ada baris duplikat, chunk existing yang
+    melayani."""
+    conn = _server_conn(monkeypatch, tmp_path)
+    store.upsert_lib(conn, {"id": "tailwind", "name": "Tailwind", "repo": "tailwindlabs/tailwindcss",
+                            "docs_url": "https://tailwindcss.com/docs", "trust": 95.0,
+                            "latest_ver": "4.0.0", "versions": "[]"})
+    store.add_chunks(conn, "tailwind", "4.0.0",
+                     [{"path": "colors", "title": "Colors", "text": "the colors utility class applies"}])
+    monkeypatch.setattr(server.registry, "resolve", lambda name, query="": [{
+        "id": "tailwindcss", "name": "tailwindcss", "repo": "tailwindlabs/tailwindcss",
+        "docs_url": "https://tailwindcss.com/docs", "trust": 95.0,
+        "latest_ver": "4.0.0", "versions": "[]"}])
+    monkeypatch.setattr(server, "_embeddings", lambda: _FakeEmbed(P))
+    monkeypatch.setattr(server.registry, "version_etag", lambda *a, **k: ("", "", []))
+    monkeypatch.setattr(server.registry, "docs_etag", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_rerank", lambda q, hits, top_n=10: hits)
+    out = server.get_docs("tailwindcss", "colors")
+    assert out, "chunk tailwind harusnya melayani query"
+    assert store.get_lib(conn, "tailwindcss") is None, "tidak boleh ada baris duplikat"
+    assert store.get_lib(conn, "tailwind") is not None
+
+
+# --- I5 + I9: freshness & cooldown ------------------------------------------
+
+def test_maybe_refresh_version_change_sets_full_0(monkeypatch, tmp_path):
+    """I5: versi baru -> latest_ver terpasang DAN full=0 (trigger re-ingest
+    call berikutnya); return True dipakai _get_docs utk baca ulang lib."""
+    conn = _server_conn(monkeypatch, tmp_path)
+    store.upsert_lib(conn, {"id": "flask", "name": "Flask", "repo": "",
+                            "docs_url": "", "trust": 95.0, "latest_ver": "3.0.0",
+                            "versions": "[]"})
+    monkeypatch.setattr(server.registry, "version_etag",
+                        lambda *a, **k: ("3.1.0", "", ["3.1.0"]))
+    lib = store.get_lib(conn, "flask")
+    assert server._maybe_refresh(conn, lib) is True
+    lib2 = store.get_lib(conn, "flask")
+    assert lib2["latest_ver"] == "3.1.0"
+    assert lib2["full"] == 0
+
+
+def test_recrawl_writes_cooldown_only_after_mark(monkeypatch, tmp_path):
+    """I9: _recrawl hanya periksa; recrawl_at ditulis _mark_recrawled SETELAH
+    crawl selesai — cooldown 1 jam mulai berlaku dari keberhasilan, bukan dari
+    permulaan (dulu gagal di tengah tetap bakar cooldown)."""
+    conn = _server_conn(monkeypatch, tmp_path)
+    store.upsert_lib(conn, {"id": "flask", "name": "Flask", "repo": "",
+                            "docs_url": "", "trust": 95.0, "latest_ver": "",
+                            "versions": "[]"})
+    store.add_chunks(conn, "flask", "", [{"path": "a.md", "title": "A", "text": "x"}])
+    conn.execute("UPDATE chunks SET fetched_at='2026-01-01 00:00:00' WHERE lib_id='flask'")
+    assert server._recrawl(conn, "flask") is True  # konten tua & belum di-mark -> boleh
+    row = conn.execute("SELECT recrawl_at FROM libs WHERE id='flask'").fetchone()[0]
+    assert row == "", "I9: _recrawl tidak boleh menulis recrawl_at"
+    server._mark_recrawled(conn, "flask")
+    assert server._recrawl(conn, "flask") is False      # cooldown aktif
+    assert server._recrawl(conn, "flask", force=True) is False  # cooldown menang
+
+
 # --- SAB-6: query kosong (xfail backlog P0-03) ------------------------------
 
 def test_get_docs_empty_query_explicit_response(monkeypatch, tmp_path):

@@ -9,8 +9,8 @@ import urllib.parse as up
 
 import httpx
 
-CHUNK_TOKENS = 256
-OVERLAP_TOKENS = 50
+CHUNK_TOKENS = 512  # D7: 256 -> 512 (ukuran optimal BM25 & embed; cap 4x)
+OVERLAP_TOKENS = 50  # vestigial (chunk_text tidak memakai overlap)
 
 _LANG_RE = re.compile(r"/(en|es|fr|de|it|ja|ko|zh|pt-br|pl|ru|el|ar|tr|uk|cs|nl|fi|sv|da|no|id|th|vi)(?:/|$)", re.I)
 
@@ -69,10 +69,33 @@ def _extract(text: str) -> str:
         _trafilatura = trafilatura
     if len(text.strip()) < 64 or "<" not in text:
         return ""
-    return _trafilatura.extract(text, include_comments=False) or ""
+    try:  # I7: HTML aneh (parsing error) tidak boleh menggagalkan get_docs
+        return _trafilatura.extract(text, include_comments=False) or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _ssrf_safe(url: str) -> bool:
+    """I15: docs_url berasal dari npm/pypi (input tidak tepercaya) — jangan
+    biarkan crawler mengakses host internal/cloud metadata. Hostname non-IP
+    yang tidak jelas (DNS rebinding) di luar cakupan; literal IP diverifikasi."""
+    host = (up.urlparse(url).hostname or "").lower()
+    if not host:
+        return False
+    if host in ("localhost", "metadata.google.internal") or host.endswith(".local"):
+        return False
+    import ipaddress
+    try:
+        ip = ipaddress.ip_address(host)
+        return not (ip.is_private or ip.is_loopback or ip.is_link_local
+                    or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+    except ValueError:
+        return True  # hostname: dibiarkan (DNS publik di luar kendali)
 
 
 def fetch_text(url: str, timeout: int = 20) -> str | None:
+    if not _ssrf_safe(url):
+        return None
     try:
         r = httpx.get(url, timeout=timeout, follow_redirects=True,
                       headers={"User-Agent": "memo/1.0"})
@@ -162,9 +185,10 @@ def _split_oversize(p: str, limit: int) -> list[str]:
     return pieces
 
 
-def ingest_docs(url: str) -> list[dict]:
-    """Fetch one page -> [{path, title, text}]."""
-    text = fetch_text(url)
+def ingest_docs(url: str, timeout: int = 20) -> list[dict]:
+    """Fetch one page -> [{path, title, text}]. timeout: budget per halaman
+    (I11: sisa deadline request — 1 halaman lambat tidak mencuri budget sisanya)."""
+    text = fetch_text(url, timeout=timeout)
     if not text:
         return []
     chunks = chunk_text(text)
@@ -198,6 +222,8 @@ def _crawl(start_url: str, deadline: float, existing: set[str] | None = None,
     terms = [t.lower() for t in re.findall(r"[a-z]+", query.lower()) if len(t) > 3]
 
     def page(url: str) -> tuple[str | None, str]:
+        if not _ssrf_safe(url):  # I15
+            return None, ""
         try:
             r = httpx.get(url, timeout=8, follow_redirects=True,
                           headers={"User-Agent": "memo/1.0"})
@@ -263,7 +289,8 @@ def _crawl(start_url: str, deadline: float, existing: set[str] | None = None,
 
 def ingest_lib(docs_url: str, deadline: float | None = None,
                existing: set[str] | None = None, query: str = "") -> tuple[list[dict], bool]:
-    """docs_url + /llms-full.txt -> try llms-full, else llms, else single page.
+    """docs_url + /llms-full.txt -> try llms-full, else llms, else sitemap
+    (D6), else gh README, else crawl, else single page.
     Returns (chunks, complete). complete=False bila deadline tercapai -> server
     menyimpan parsial dan melanjutkan di call berikutnya.
     ponytail: serial fetch; deadline None = tak terbatas (warmup)."""
@@ -272,6 +299,7 @@ def ingest_lib(docs_url: str, deadline: float | None = None,
         # warmup/CLI: tak terbatas (cap 200 chunk masih berlaku). Sebelumnya 60s
         # -> import 40s + probe 12s meninggalkan ~8s crawl (litestar 1 chunk).
         deadline = float("inf")
+    existing = {norm_path(e) for e in (existing or set())}  # I10: bentuk path ter-norm
     for candidate in (f"{base}/llms-full.txt", f"{base}/llms.txt"):
         # probe pendek: llms.txt kecil; 404/slow = langsung ke sumber berikut.
         # deadline absolute: probe yg lama mencuri budget crawl.
@@ -282,16 +310,25 @@ def ingest_lib(docs_url: str, deadline: float | None = None,
         if not pages:
             return ingest_docs(candidate), True
         out = []
+        seen: set[str] = set()
         for p in pages:
             if time.monotonic() > deadline:
                 return out, False
-            chunks = ingest_docs(p["url"])
+            url = norm_path(p["url"])  # I13: satu konvensi path = URL ter-norm
+            if url in seen or (existing and url in existing):  # I10: hormati existing
+                continue
+            seen.add(url)
+            to = 20 if deadline == float("inf") else max(2, int(deadline - time.monotonic()))  # I11
+            chunks = ingest_docs(p["url"], timeout=to)
             for c in chunks:
-                c["path"] = f"{p['title']} ({p['url']})"
+                c["path"] = url
             out.extend(chunks)
             if len(out) > 300:  # cap chunks per library
                 return out, True
         return out, True
+    sitemap, complete = _ingest_sitemap(base, deadline, existing, query)
+    if sitemap:
+        return sitemap, complete
     raw = _gh_raw(base)
     if raw is not None:
         return raw, True
@@ -313,7 +350,10 @@ def _fetch_llms(url: str, timeout: float = 6) -> str | None:
         return None
     if r.status_code != 200:
         return None
-    if "text/html" in r.headers.get("content-type", "") or r.text.lstrip().startswith("<"):
+    body = r.text.lstrip().lower()
+    # Sphinx/RTD 404-page HTML ber-status 200 -> ditolak; sitemap XML (`<?xml`,
+    # `<urlset`) LEWAT (D6: content-type application/xml, bukan HTML).
+    if "text/html" in r.headers.get("content-type", "") or body.startswith(("<html", "<!doctype")):
         return None
     if _looks_404(r.text):
         return None
@@ -326,6 +366,64 @@ def _looks_404(text: str) -> bool:
     korpus (1 chunk sampah, terdeteksi saat debug R2 sqlalchemy)."""
     t = text.lower()
     return len(text) < 2000 and ("page you're looking for" in t or "not found" in t)
+
+
+def _sitemap_locs(text: str) -> list[str]:
+    """D6: parse sitemap XML (urlset LANGSUNG atau sitemapindex -> nested).
+    Namespace sitemap standar; stdlib xml.etree, tanpa dependency."""
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError:
+        return []
+    ns = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+    return [e.text.strip() for e in root.findall(".//s:loc", ns) if e.text and e.text.strip()]
+
+
+def _ingest_sitemap(base: str, deadline: float, existing: set[str] | None,
+                    query: str = "") -> tuple[list[dict], bool]:
+    """D6: fallback utk docs SPA/statis tanpa llms.txt (docs.astro.build,
+    docs.duckdb.org). sitemap-index.xml/sitemap.xml -> locs -> chunk tiap
+    halaman (hormati existing + deadline per fetch). Sitemap-index ditelusuri
+    satu tingkat (sitemap-0.xml dst)."""
+    pages: list[str] = []
+    for u in (f"{base}/sitemap-index.xml", f"{base}/sitemap.xml"):
+        text = _fetch_llms(u, timeout=5)
+        if not text:
+            continue
+        locs = _sitemap_locs(text)
+        if not locs:
+            continue
+        for loc in locs:
+            if loc.endswith(".xml") and "sitemap" in loc.lower():
+                sub = _fetch_llms(loc, timeout=5)
+                pages.extend(l for l in _sitemap_locs(sub)
+                             if _path_allowed(l, base))  # nested sitemap pun difilter
+            elif _path_allowed(loc, base):
+                pages.append(loc)
+        if pages:
+            break
+    if not pages:
+        return [], True
+    terms = [t.lower() for t in re.findall(r"[a-z]+", query.lower()) if len(t) > 3]
+    out = []
+    seen = {norm_path(e) for e in (existing or set())}
+    # dedupe + halaman yg match query diproses duluan (jawab relevansi cepat)
+    for url in sorted(set(pages), key=lambda u: (not any(t in u.lower() for t in terms), len(u))):
+        if time.monotonic() > deadline:
+            return out, False
+        n = norm_path(url)
+        if n in seen:
+            continue
+        seen.add(n)
+        to = 20 if deadline == float("inf") else max(2, int(deadline - time.monotonic()))  # I11
+        chunks = ingest_docs(url, timeout=to)
+        for c in chunks:
+            c["path"] = n
+        out.extend(chunks)
+        if len(out) > 300:
+            return out, True
+    return out, True
 
 
 def _demo() -> None:

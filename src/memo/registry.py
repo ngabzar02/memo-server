@@ -252,19 +252,22 @@ def versions_of(name: str) -> list[str]:
     """Riwayat versi dari SEMUA ekosistem (npm/PyPI/crates/Go/RubyGems).
     Pilih sumber dgn versi TERBANYAK: npm 'fastapi' (8 versi kuno) kalah dari
     PyPI fastapi resmi (100+); npm express (207) menang atas pypi express.
-    Cache TTL sama dgn resolve (1 jam): alias path memanggil ini per request."""
+    I14: 5 sumber dipanggil PARALEL (dulu serial ~30s di bawah lock).
+    Cache TTL 1 jam."""
     key = f"vo|{name}"
     hit = _cache.get(key)
     if hit and time.monotonic() - hit[0] < _CACHE_TTL:
         return hit[1]
     best: list[str] = []
-    for fn in (_npm, _pypi, _crates, _go, _rubygems):
-        try:
-            hit = fn(name)
-            if hit and hit.get("versions") and len(hit["versions"]) > len(best):
-                best = hit["versions"]
-        except Exception:  # noqa: BLE001
-            continue
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        futures = [ex.submit(fn, name) for fn in (_npm, _pypi, _crates, _go, _rubygems)]
+        for f in futures:
+            try:
+                hit = f.result()
+                if hit and hit.get("versions") and len(hit["versions"]) > len(best):
+                    best = hit["versions"]
+            except Exception:  # noqa: BLE001
+                continue
     _cache[key] = (time.monotonic(), best)
     return best
 
@@ -361,15 +364,27 @@ def _has_llms(docs_url: str) -> bool:
     return ok
 
 
+_STARS_CACHE: dict[str, tuple[float, float]] = {}  # repo -> (ts, stars | -1 rate-limit)
+
+
 def _stars_of(repo: str) -> float:
-    """Stars GitHub via API repo (anon, rate limit 60/h). 0 bila gagal."""
+    """Stars GitHub via API repo (anon, rate limit 60/h). I16: cache TTL 24h;
+    403/429 -> sentinel -1 (berhenti memukul API yg rate-limit, tak 0 senyap
+    berulang-ulang)."""
     if not repo:
         return 0.0
+    hit = _STARS_CACHE.get(repo)
+    if hit and time.monotonic() - hit[0] < 86400:
+        return max(hit[1], 0.0)
     try:
         r = httpx.get(f"https://api.github.com/repos/{repo}", timeout=4,
                       headers=_gh_headers())
         if r.status_code == 200:
-            return float(r.json().get("stargazers_count", 0))
+            stars = float(r.json().get("stargazers_count", 0))
+            _STARS_CACHE[repo] = (time.monotonic(), stars)
+            return stars
+        if r.status_code in (403, 429):
+            _STARS_CACHE[repo] = (time.monotonic(), -1.0)
     except httpx.HTTPError:
         pass
     return 0.0
@@ -397,13 +412,40 @@ def _enrich(cands: list[dict], name: str) -> None:
 
 def resolve(name: str, query: str = "") -> list[dict]:
     """Return candidates [{id, name, repo, docs_url, trust, latest_ver, versions}].
-    TTL-cache per name: resolve penuh = 6 panggilan jaringan ~14s di ARM."""
-    key = f"{name}|{query}"
+    Alias curated / builtin stdlib -> instan (tanpa network, tanpa cache).
+    Network -> TTL-cache by NAME saja (I4: name yg sama dgn query berbeda tidak
+    re-resolve ~14s; A4 boost query diterapkan per-call di atas cache copy)."""
+    hit = _alias(name)
+    if hit and float(hit.get("trust", 0)) > 90:
+        c = _norm_cand(hit, name)
+        # A3: alias curated tanpa riwayat versi (aliases.json) di-isi dari
+        # ekosistem; latest_ver junk (npm 0.0.3) dikoreksi. Builtin stdlib
+        # (node:/py:) dilewati — versi npm tak bermakna di sana.
+        if not str(c["id"]).startswith(("node:", "py:")):
+            vs = versions_of(name)  # TTL-cache 1 jam
+            if vs:
+                if not c["latest_ver"] or c["latest_ver"] not in vs:
+                    c["latest_ver"] = vs[0]
+                c["versions"] = json.dumps(vs[:20])
+        return [c]
+    hit = _builtin(name, query)
+    if hit:
+        return [_norm_cand(hit, name)]
+    key = f"n|{name}"
     hit = _cache.get(key)
     if hit and time.monotonic() - hit[0] < _CACHE_TTL:
-        return hit[1]
-    out = _resolve(name, query)
-    _cache[key] = (time.monotonic(), out)
+        out = [dict(c) for c in hit[1]]  # copy: boost caller tidak menodai cache
+    else:
+        out = _resolve(name, query)
+        _cache[key] = (time.monotonic(), out)
+        out = [dict(c) for c in out]
+    if query:  # A4: boost kandidat yg cocok dgn kata kunci query (rank akhir)
+        qterms = [t for t in re.findall(r"[a-z0-9]{4,}", query.lower())]
+        for c in out:
+            hay = f"{c['id']} {c.get('repo', '')} {c.get('docs_url', '')}".lower()
+            if any(t in hay for t in qterms):
+                c["trust"] += 0.5
+    out.sort(key=lambda c: -c["trust"])
     return out
 
 
@@ -423,24 +465,9 @@ def _norm_cand(hit: dict, name: str) -> dict:
 
 def _resolve(name: str, query: str = "") -> list[dict]:
     """6 sumber network dijalankan PARALEL (ThreadPool): resolve 12.5s -> ~2-3s.
-    alias/builtin instan -> langsung saja; sisanya paralel."""
+    Dedupe/merge -> enrich trust -> filter threshold. Alias/builtin early-return
+    dan A4 boost ada di resolve(); jalur ini murni network + cacheable by name."""
     cands = []
-    for fn in (lambda: _alias(name), lambda: _builtin(name, query)):
-        hit = fn()
-        if hit:
-            cands.append(hit)
-            if "trust" in hit and float(hit.get("trust", 0)) > 90:
-                c = _norm_cand(hit, name)
-                # A3: alias curated tanpa riwayat versi (aliases.json) di-isi
-                # dari ekosistem; latest_ver junk (npm 0.0.3) dikoreksi. Builtin
-                # stdlib (node:/py:) dilewati — versi npm tak bermakna di sana.
-                if not str(hit.get("id", "")).startswith(("node:", "py:")):
-                    vs = versions_of(name)  # TTL-cache 1 jam
-                    if vs:
-                        if not c["latest_ver"] or c["latest_ver"] not in vs:
-                            c["latest_ver"] = vs[0]
-                        c["versions"] = json.dumps(vs[:20])
-                return [c]
     with ThreadPoolExecutor(max_workers=6) as ex:
         futures = {ex.submit(fn): label for label, fn in (
             ("llmstxt", lambda: _dir_entry(name)),
@@ -493,12 +520,6 @@ def _resolve(name: str, query: str = "") -> list[dict]:
                     k["versions"] = c.get("versions") or "[]"
     out = kept
     _enrich(out, name)  # trust final: stars + llms.txt + penalti fork/README
-    if query:  # A4: boost kandidat yg cocok dgn kata kunci query (rank akhir)
-        qterms = [t for t in re.findall(r"[a-z0-9]{4,}", query.lower())]
-        for c in out:
-            hay = f"{c['id']} {c.get('repo', '')} {c.get('docs_url', '')}".lower()
-            if any(t in hay for t in qterms):
-                c["trust"] += 0.5
     out.sort(key=lambda c: -c["trust"])
     # A5: tolak entri karangan — trust < 0.5 (tanpa sinyal kualitas: 0 stars,
     # tanpa llms.txt, repo/docs tidak dikenal). Dulu 1.0 terlalu agresif:

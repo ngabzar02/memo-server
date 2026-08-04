@@ -65,6 +65,18 @@ def _lock_for(lib_id: str) -> threading.Lock:
         return _lib_locks.setdefault(lib_id, threading.Lock())
 
 
+def _lock_key(library_id: str) -> str:
+    """I3: key lock = docs_url canonical utk alias/builtin (lookup instan, tanpa
+    network) — 'tailwind' & 'tailwindcss' (alias docs_url sama) antri di lock
+    yang sama; selain itu nama mentah. Namespaced (node:/py:) dipakai apa adanya."""
+    if ":" in library_id:
+        return "name|" + library_id
+    for cand in (registry._alias(library_id), registry._builtin(library_id, "")):
+        if cand and cand.get("docs_url"):
+            return "docs|" + cand["docs_url"]
+    return "name|" + library_id
+
+
 _RECRAWL_COOLDOWN = 3600.0  # A2: 1 jam antar re-crawl per lib (anti hot-loop)
 _RECRAWL_MAX_AGE_DAYS = 7
 
@@ -72,8 +84,9 @@ _RECRAWL_MAX_AGE_DAYS = 7
 def _recrawl(conn: sqlite3.Connection, library_id: str, force: bool = False) -> bool:
     """A2: bolehkah re-crawl lib SEKARANG? Cooldown 1 jam per lib. force
     (query-miss) -> ya; selain itu ya bila konten lebih tua dari
-    _RECRAWL_MAX_AGE_DAYS (docs berubah tanpa versi berubah). Mencatat
-    recrawl_at (cooldown) sekali BERLAKU utk jalur force & age."""
+    _RECRAWL_MAX_AGE_DAYS (docs berubah tanpa versi berubah).
+    I9: TIDAK menulis recrawl_at di sini — ditulis oleh _mark_recrawled
+    SETELAH crawl selesai (dulu ditulis sebelum, gagal tetap bakar cooldown)."""
     from datetime import datetime
     r = conn.execute("SELECT recrawl_at FROM libs WHERE id=?", (library_id,)).fetchone()
     last = r[0] if r else ""
@@ -83,8 +96,6 @@ def _recrawl(conn: sqlite3.Connection, library_id: str, force: bool = False) -> 
                 return False
         except ValueError:
             pass
-    conn.execute("UPDATE libs SET recrawl_at=datetime('now') WHERE id=?", (library_id,))
-    conn.commit()
     if force:
         return True
     r = conn.execute("SELECT MAX(fetched_at) FROM chunks WHERE lib_id=?", (library_id,)).fetchone()
@@ -97,14 +108,27 @@ def _recrawl(conn: sqlite3.Connection, library_id: str, force: bool = False) -> 
         return True
 
 
-def _embeddings():
-    """Lazy singleton: model load ~0.7s (cache panas), RAM ~240MB."""
-    if not hasattr(_embeddings, "model"):
-        from fastembed import TextEmbedding
+def _mark_recrawled(conn: sqlite3.Connection, library_id: str) -> None:
+    """I9: recrawl_at ditulis HANYA setelah crawl/chunks diterima — cooldown
+    1 jam berlaku utk PERCOBAAN yg selesai, bukan yg gagal di tengah."""
+    conn.execute("UPDATE libs SET recrawl_at=datetime('now') WHERE id=?", (library_id,))
+    conn.commit()
 
-        # threads=2 + batch 8 = 89ms/chunk di ARM (vs 798ms default: thread
-        # contention ORT). batch >8 diminishing; threads>2 contention.
-        _embeddings.model = TextEmbedding("BAAI/bge-small-en-v1.5", threads=2)
+
+_model_lock = threading.Lock()
+
+
+def _embeddings():
+    """Lazy singleton: model load ~0.7s (cache panas), RAM ~240MB.
+    I2: double-checked locking — 2 request paralel tidak boleh load 2×."""
+    if not hasattr(_embeddings, "model"):
+        with _model_lock:
+            if not hasattr(_embeddings, "model"):
+                from fastembed import TextEmbedding
+
+                # threads=2 + batch 8 = 89ms/chunk di ARM (vs 798ms default: thread
+                # contention ORT). batch >8 diminishing; threads>2 contention.
+                _embeddings.model = TextEmbedding("BAAI/bge-small-en-v1.5", threads=2)
     return _embeddings.model
 
 
@@ -116,15 +140,17 @@ def _get_reranker():
     di ARM — default ON; gagal load (offline/hilang) -> fallback hybrid saja."""
     global _reranker
     if _reranker is None:
-        try:
-            from memo.rerank import CrossReranker
-            _reranker = CrossReranker(threads=2)
-        except Exception as e:  # noqa: BLE001
-            log.warning("reranker off: %s", str(e)[:100])
-            # FP-4 [P0-04]: fallback tidak senyap — catat metrik di activity log.
-            _log_activity({"t": time.time(), "tool": "get_docs", "event": "fallback",
-                           "kind": "rerank", "detail": str(e)[:100]})
-            _reranker = False
+        with _model_lock:
+            if _reranker is None:
+                try:
+                    from memo.rerank import CrossReranker
+                    _reranker = CrossReranker(threads=2)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("reranker off: %s", str(e)[:100])
+                    # FP-4 [P0-04]: fallback tidak senyap — catat metrik di activity log.
+                    _log_activity({"t": time.time(), "tool": "get_docs", "event": "fallback",
+                                   "kind": "rerank", "detail": str(e)[:100]})
+                    _reranker = False
     return _reranker or None
 
 
@@ -144,6 +170,33 @@ def _rerank(query: str, hits: list[dict[str, Any]], top_n: int = 10) -> list[dic
     except Exception as e:  # noqa: BLE001
         log.warning("rerank failed: %s", str(e)[:100])
         return hits
+
+
+_EMBED_BATCH = 8
+
+
+def _embed_all(texts: list[str]) -> list[list[float]]:
+    """Embed daftar teks ber-batch (8 = optimal ORT ARM). numpy float32 -> float."""
+    return [[float(x) for x in e]
+            for i in range(0, len(texts), _EMBED_BATCH)
+            for e in _embeddings().embed([t for t in texts[i:i + _EMBED_BATCH]])]
+
+
+def _embed_async(lib_id: str, ver: str, chunks: list[dict]) -> None:
+    """I1/D1: embed + vec di background thread (daemon) SETELAH response FTS
+    terkirim — 622ms/chunk di ARM tidak muat budget 30s. add_chunks UPSERT
+    per-path: baris FTS-only diganti baris vec; request berikutnya memakai
+    vec (hybrid best-effort). Gagal embed = log, FTS tetap melayani."""
+    try:
+        embs = _embed_all([c["text"] for c in chunks])
+        conn = store.connect()
+        try:
+            store.add_chunks(conn, lib_id, ver, chunks, embs)
+        finally:
+            conn.close()
+        log.info("vec: %s %d chunk ter-embed", lib_id, len(chunks))
+    except Exception as e:  # noqa: BLE001
+        log.warning("vec embed gagal %s: %s", lib_id, str(e)[:100])
 
 
 @mcp.tool()
@@ -175,7 +228,7 @@ def resolve_library_id(library_name: str, query: str = "") -> list[dict[str, Any
 def get_docs(library_id: str, query: str, version: str | None = None) -> list[dict[str, Any]]:
     """Get relevant documentation chunks for a library and query.
     Cache hit: sub-ms. Cache miss: fetch+ingest+index once (~5-60s first time)."""
-    with _lock_for(library_id):  # paralel antar lib; serial utk lib sama
+    with _lock_for(_lock_key(library_id)):  # paralel antar lib; serial utk lib sama
         return _get_docs(library_id, query, version,
                          deadline=time.monotonic() + _REQUEST_BUDGET)
 
@@ -199,6 +252,7 @@ def _get_docs(library_id: str, query: str, version: str | None = None,
         return []
     conn = store.connect()
     lib = store.get_lib(conn, library_id)
+    ingested = 0  # I20: jumlah chunk yang masuk di call ini (utk activity log)
     chunk_count = conn.execute(
         "SELECT COUNT(*) FROM chunks WHERE lib_id=?", (library_id,)
     ).fetchone()[0]
@@ -208,8 +262,10 @@ def _get_docs(library_id: str, query: str, version: str | None = None,
         # tidak dipanggil per request; registry.resolve juga TTL-cache sendiri.
         if _docs_changed(conn, library_id):
             lib = store.get_lib(conn, library_id)  # di-drop -> None
-    if lib and not version:
-        _maybe_refresh(conn, lib)  # freshness: versi baru / etag docs berubah
+    if lib and not version and _maybe_refresh(conn, lib):
+        # I5: return dipakai — versi berubah (latest_ver + full=0 di-DB) ->
+        # baca ulang supaya jalur re-ingest (not full) aktif call ini juga.
+        lib = store.get_lib(conn, library_id)
     has_chunks = lib is not None and chunk_count > 0
     full = (lib or {}).get("full", 1)
     if not lib:
@@ -220,12 +276,29 @@ def _get_docs(library_id: str, query: str, version: str | None = None,
                            "reason": "resolve_empty", "top": []})
             return _guidance(library_id, query, "resolve")
         lib = cands[0]
-        lib["versions"] = json.dumps([lib["latest_ver"]] if lib.get("latest_ver") else [])
-        store.upsert_lib(conn, lib)
-        has_chunks = False
+        # I3: docs_url sama dgn lib lain (tailwind vs tailwindcss) -> merger ke
+        # id existing; chunk hasil ingest tsb ikut dipakai, tanpa baris duplikat.
+        dup = (conn.execute("SELECT id FROM libs WHERE docs_url=? AND id<>? LIMIT 1",
+                            (lib.get("docs_url") or "", lib["id"])).fetchone()
+               if lib.get("docs_url") else None)
+        if dup:
+            library_id = dup[0]
+            lib = store.get_lib(conn, library_id)
+            chunk_count = conn.execute(
+                "SELECT COUNT(*) FROM chunks WHERE lib_id=?", (library_id,)).fetchone()[0]
+        else:
+            lib["versions"] = json.dumps([lib["latest_ver"]] if lib.get("latest_ver") else [])
+            store.upsert_lib(conn, lib)
+        has_chunks = lib is not None and chunk_count > 0
     ver = version or lib.get("latest_ver") or ""
-    vec = _embeddings().embed([query])
-    query_vec = [float(x) for x in list(vec)[0]]  # numpy float32 -> float, utk json.dumps
+    # I1: embed query HANYA kalau indeks vec punya baris utk lib ini (prod:
+    # chunks_vec=0 -> jangan buang ~600ms tiap request utk embed yg tak terpakai).
+    has_vec = conn.execute("SELECT 1 FROM chunks_vec WHERE lib_id=? LIMIT 1",
+                           (library_id,)).fetchone() is not None
+    query_vec = None
+    if has_vec:
+        vec = _embeddings().embed([query])
+        query_vec = [float(x) for x in list(vec)[0]]  # numpy float32 -> float, utk json.dumps
     crawl_deadline = deadline - 2 if deadline else None  # FTS instan: sisakan utk index+search
     hits = store.search(conn, library_id, query, k=10, query_vec=query_vec,
                         version=version or "")
@@ -241,6 +314,7 @@ def _get_docs(library_id: str, query: str, version: str | None = None,
         chunks, complete = ingest.ingest_lib(
             lib.get("docs_url") or f"https://{lib.get('repo','')}",
             deadline=crawl_deadline, existing=existing, query=query)
+        _mark_recrawled(conn, library_id)  # I9: cooldown mulai SETELAH crawl selesai
         if not chunks:
             conn.execute("UPDATE libs SET full=? WHERE id=?", (1 if ingest.is_full(complete, len(chunks)) else 0, library_id))
             conn.commit()
@@ -251,17 +325,18 @@ def _get_docs(library_id: str, query: str, version: str | None = None,
                 return _guidance(library_id, query, "ingest")
         else:
             chunks = chunks[:200]  # cap: 200 embed ~3 menit di ARM; cukup utk top docs
+            ingested = len(chunks)
             if deadline is None:
                 # warmup/CI (tanpa budget): embed penuh utk release cache
-                embs: list[list[float] | None] = []
-                for i in range(0, len(chunks), 8):  # batch 8: optimal ORT ARM
-                    embs.extend([[float(x) for x in e] for e in _embeddings().embed([c["text"] for c in chunks[i:i+8]])])
-                store.add_chunks(conn, library_id, ver, chunks, embs)
+                store.add_chunks(conn, library_id, ver, chunks,
+                                 _embed_all([c["text"] for c in chunks]))
             else:
-                # MCP path: FTS-only. Embed chunk 256 token ~1-2s/chunk di ARM
-                # (bge-small quantized) > budget 20s. Vec penuh dari pre-built
-                # CI; hits tetap relevan via BM25+RRF (teruji broadcasting).
+                # I1: MCP path — FTS dulu (response cepat), vec di-background
+                # thread (622ms/chunk di ARM >> budget 30s). Request berikutnya
+                # sudah hybrid penuh (best-effort).
                 store.add_chunks(conn, library_id, ver, chunks)
+                threading.Thread(target=_embed_async,
+                                 args=(library_id, ver, chunks), daemon=True).start()
             conn.execute("UPDATE libs SET full=? WHERE id=?", (1 if ingest.is_full(complete, len(chunks)) else 0, library_id))
             conn.commit()
         hits = store.search(conn, library_id, query, k=10, query_vec=query_vec,
@@ -275,17 +350,24 @@ def _get_docs(library_id: str, query: str, version: str | None = None,
         chunks, complete = ingest.ingest_lib(
             lib.get("docs_url") or f"https://{lib.get('repo','')}",
             deadline=crawl_deadline, existing=existing, query=query)
+        _mark_recrawled(conn, library_id)  # I9
         if chunks:
+            ingested = len(chunks)
             store.add_chunks(conn, library_id, ver, chunks)
+            threading.Thread(target=_embed_async,
+                             args=(library_id, ver, chunks), daemon=True).start()
             conn.execute("UPDATE libs SET full=? WHERE id=?",
                          (1 if ingest.is_full(complete, len(chunks)) else 0, library_id))
             conn.commit()
             hits = store.search(conn, library_id, query, k=10,
                                 query_vec=query_vec, version=version or "")
     hits = _rerank(query, hits)
+    # I20: query-miss pd lib lengkap direkam eksplisit (docker/react top:[])
     _log_activity({"t": time.time(), "tool": "get_docs", "lib": library_id,
                    "q": query, "ver": ver, "ms": round((time.monotonic() - t0) * 1000),
-                   "top": [h["path"] for h in hits[:5]]})
+                   "n_chunks": ingested,
+                   "top": [h["path"] for h in hits[:5]],
+                   **({"event": "query_miss"} if not hits and has_chunks and full else {})})
     return store.trim_to_tokens(hits)
 
 
@@ -321,8 +403,8 @@ def _docs_changed(conn: sqlite3.Connection, library_id: str) -> bool:
 
 def _maybe_refresh(conn: sqlite3.Connection, lib: dict) -> bool:
     """Freshness: cek versi terbaru periodik (TTL by popularitas: trust>5 = 1d,
-    lain 7d). Versi berubah -> update + drop chunks (re-ingest saat dipakai).
-    Returns True bila lib di-drop (perlu re-ingest)."""
+    lain 7d). Versi berubah -> update + full=0 (re-ingest saat dipakai).
+    Returns True bila versi berubah (perlu re-ingest)."""
     last = lib.get("last_check") or ""
     ttl = 86400 if float(lib.get("trust", 0)) > 5 else 604800
     if last:
@@ -337,11 +419,12 @@ def _maybe_refresh(conn: sqlite3.Connection, lib: dict) -> bool:
     conn.execute("UPDATE libs SET last_check=datetime('now') WHERE id=?", (lib["id"],))
     conn.commit()
     if latest and latest != lib.get("latest_ver"):
-        conn.execute("UPDATE libs SET latest_ver=?, versions=? WHERE id=?",
+        # I5: versi baru -> full=0 membersihkan flag ingest-lengkap supaya call
+        # berikutnya re-ingest (chunks lama tetap melayani sampai diganti
+        # per-path — DELETE dulu terbukti merugikan: re-ingest gagal deadline
+        # 20s -> lib jadi 0 chunk).
+        conn.execute("UPDATE libs SET latest_ver=?, versions=?, full=0 WHERE id=?",
                      (latest, json.dumps(vs or []), lib["id"]))
-        # chunks versi lama DIBIARKAN (tetap relevan; re-ingest berikutnya
-        # mengganti per-path). DELETE dulu terbukti merugikan: re-ingest
-        # gagal deadline 20s -> lib jadi 0 chunk.
         conn.commit()
         return True
     # A9: lib tanpa sumber versi (version_etag -> latest="") — docs bisa berubah
@@ -473,8 +556,13 @@ def _fetch_cache(force: bool = False, dry_run: bool = False) -> int:
     bak = Path(store.DEFAULT_DB + ".pre-cache")
     if Path(store.DEFAULT_DB).exists():
         shutil.move(store.DEFAULT_DB, bak)
-    with gzip.open(tmp, "rb") as gz, open(store.DEFAULT_DB, "wb") as f:
-        shutil.copyfileobj(gz, f)
+    try:  # I26: ekstraksi gagal (korup/disk penuh) -> rollback DB lama
+        with gzip.open(tmp, "rb") as gz, open(store.DEFAULT_DB, "wb") as f:
+            shutil.copyfileobj(gz, f)
+    except Exception as e:  # noqa: BLE001
+        shutil.move(bak, store.DEFAULT_DB)
+        print(f"cache: ekstraksi gagal, rollback: {str(e)[:100]}", file=sys.stderr)
+        return 1
     tmp.unlink(missing_ok=True)
     check = sqlite3.connect(store.DEFAULT_DB, timeout=30)
     ok = check.execute("PRAGMA integrity_check").fetchone()[0] == "ok"

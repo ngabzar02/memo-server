@@ -84,6 +84,29 @@ def version_etag(name: str, old_etag: str = "") -> tuple[str, str, list[str]]:
     return "", old_etag, []
 
 
+def docs_etag(docs_url: str, old_etag: str = "") -> str | None:
+    """A9: sinyal perubahan docs NON-versioning — HEAD llms.txt (fallback
+    docs_url), conditional If-None-Match. Returns etag saat ini (None = probe
+    gagal; 304 -> old_etag, artinya tidak berubah)."""
+    if not docs_url:
+        return None
+    for u in (f"{docs_url.rstrip('/')}/llms.txt", docs_url.rstrip("/")):
+        try:
+            h = {"User-Agent": "memo/1.0"}
+            if old_etag:
+                h["If-None-Match"] = old_etag
+            r = httpx.head(u, timeout=6, follow_redirects=True, headers=h)
+            if r.status_code == 304:
+                return old_etag
+            if r.status_code == 200:
+                et = r.headers.get("etag")
+                if et:
+                    return et
+        except httpx.HTTPError:
+            pass
+    return None
+
+
 def _dir_entry(name: str) -> dict | None:
     """directory.llmstxt.cloud: GET /{name}/llms.txt -> docs_url."""
     try:
@@ -386,7 +409,9 @@ def resolve(name: str, query: str = "") -> list[dict]:
 
 def _norm_cand(hit: dict, name: str) -> dict:
     return {
-        "id": hit.get("id") or _clean_id(name),
+        # id WAJIB str: MCP schema menolak int (GitHub API mengirim "id" numerik
+        # saat token terpasang; bench crash: resolve -> get_docs library_id int).
+        "id": str(hit.get("id") or _clean_id(name)),
         "name": name,
         "repo": hit.get("repo", ""),
         "docs_url": _norm_url(hit.get("docs_url", "")),
@@ -405,7 +430,17 @@ def _resolve(name: str, query: str = "") -> list[dict]:
         if hit:
             cands.append(hit)
             if "trust" in hit and float(hit.get("trust", 0)) > 90:
-                return [_norm_cand(hit, name)]  # alias/builtin curated: final, tanpa network
+                c = _norm_cand(hit, name)
+                # A3: alias curated tanpa riwayat versi (aliases.json) di-isi
+                # dari ekosistem; latest_ver junk (npm 0.0.3) dikoreksi. Builtin
+                # stdlib (node:/py:) dilewati — versi npm tak bermakna di sana.
+                if not str(hit.get("id", "")).startswith(("node:", "py:")):
+                    vs = versions_of(name)  # TTL-cache 1 jam
+                    if vs:
+                        if not c["latest_ver"] or c["latest_ver"] not in vs:
+                            c["latest_ver"] = vs[0]
+                        c["versions"] = json.dumps(vs[:20])
+                return [c]
     with ThreadPoolExecutor(max_workers=6) as ex:
         futures = {ex.submit(fn): label for label, fn in (
             ("llmstxt", lambda: _dir_entry(name)),
@@ -458,10 +493,17 @@ def _resolve(name: str, query: str = "") -> list[dict]:
                     k["versions"] = c.get("versions") or "[]"
     out = kept
     _enrich(out, name)  # trust final: stars + llms.txt + penalti fork/README
+    if query:  # A4: boost kandidat yg cocok dgn kata kunci query (rank akhir)
+        qterms = [t for t in re.findall(r"[a-z0-9]{4,}", query.lower())]
+        for c in out:
+            hay = f"{c['id']} {c.get('repo', '')} {c.get('docs_url', '')}".lower()
+            if any(t in hay for t in qterms):
+                c["trust"] += 0.5
     out.sort(key=lambda c: -c["trust"])
-    # FP-1 [P0-02]: tolak entri karangan — trust final < 1.0 (tanpa sinyal
-    # kualitas: 0 stars, tanpa llms.txt, repo/docs tidak dikenal) -> not found.
-    return [c for c in out if c["trust"] >= 1.0]
+    # A5: tolak entri karangan — trust < 0.5 (tanpa sinyal kualitas: 0 stars,
+    # tanpa llms.txt, repo/docs tidak dikenal). Dulu 1.0 terlalu agresif:
+    # lib kecil/baru (trust 0.x) hilang padahal docs_url valid.
+    return [c for c in out if c["trust"] >= 0.5]
 
 
 def _demo() -> None:

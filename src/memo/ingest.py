@@ -25,6 +25,28 @@ def _path_allowed(url: str, base_url: str) -> bool:
     return m is None or m.group(1).lower() == "en"
 
 
+def norm_path(url: str) -> str:
+    """A8: normalisasi URL utk dedupe — strip trailing slash + .html.
+    `/overview.html` dan `/overview/` -> `/overview` (satu halaman, dua path)."""
+    p = up.urlparse(url)
+    path = p.path.rstrip("/")
+    if path.endswith(".html"):
+        path = path[:-5]
+    return up.urlunparse((p.scheme, p.netloc, path or "/", "", "", ""))
+
+
+_TEXT_TYPES = {"text/html", "text/plain", "text/markdown", "text/x-markdown",
+               "text/xml", "application/xml", "application/xhtml+xml"}
+
+
+def _textual(content_type: str) -> bool:
+    """A11: hanya konten dokumen teks yg boleh masuk korpus. CSS/JS/binary
+    (tailwind .png, httpx .min.css) TIDAK — dulu meracuni 135/200 chunk
+    tailwind dgn raw binary PNG."""
+    ct = (content_type or "").split(";")[0].strip().lower()
+    return (not ct) or ct in _TEXT_TYPES or ct.endswith("+html")
+
+
 def is_full(complete: bool, n_chunks: int, min_chunks: int = 3) -> bool:
     """full flag (R4-BUG5): complete TAPI korpus < 3 chunk = parsial palsu
     (requests 1 chunk full=1). Re-ingest akan terjadi di call berikutnya."""
@@ -56,6 +78,8 @@ def fetch_text(url: str, timeout: int = 20) -> str | None:
                       headers={"User-Agent": "memo/1.0"})
         if r.status_code != 200:
             return None
+        if not _textual(r.headers.get("content-type", "")):
+            return None
         if "text/html" in r.headers.get("content-type", "") or r.text.strip().startswith("<"):
             return _extract(r.text)
         return r.text  # plain text (llms.txt / llms-full.txt)
@@ -76,13 +100,17 @@ def parse_llms(text: str, base_url: str | None = None) -> list[dict]:
 
 def chunk_text(text: str, max_tokens: int = CHUNK_TOKENS, overlap: int = OVERLAP_TOKENS) -> list[str]:
     """Split by sections (heading-aware): tiap section H1-H4 jadi unit sendiri,
-    heading ikut sebagai breadcrumb; code block tidak dipotong."""
+    heading ikut sebagai breadcrumb; code block tidak dipotong.
+    Fence ``` dilacak parity inkremental — scan ulang cur[] per baris itu O(n^2):
+    halaman 20k baris ~45s (warmup anthropic macet). Parity juga benar: heading
+    SETELAH fence ditutup jadi section baru (dulu any() -> terkunci dalam code)."""
     lines = text.splitlines()
-    sections, cur = [], []
+    sections, cur, fence_open = [], [], False
     for ln in lines:
+        if ln.startswith("```"):
+            fence_open = not fence_open
         is_h = re.match(r"^#{1,4} ", ln) is not None
-        in_code = [l.startswith("```") for l in cur[::-1]]
-        if is_h and not any(in_code):
+        if is_h and not fence_open:
             if cur:
                 sections.append("\n".join(cur))
             cur = [ln]
@@ -177,6 +205,8 @@ def _crawl(start_url: str, deadline: float, existing: set[str] | None = None,
             return None, ""
         if r.status_code != 200:
             return None, ""
+        if not _textual(r.headers.get("content-type", "")):  # A11: gambar/css/js bukan docs
+            return None, ""
         text = _extract(r.text) or ""
         return text, r.text  # text utk chunk, html mentah utk link BFS
 
@@ -192,7 +222,7 @@ def _crawl(start_url: str, deadline: float, existing: set[str] | None = None,
         return 2
 
     seen, out, queue = set(), [], [base]
-    existing = existing or set()
+    existing = {norm_path(e) for e in (existing or set())}
     with ThreadPoolExecutor(max_workers=4) as ex:
         while queue and time.monotonic() < deadline and len(out) < 200:
             # ambil batch URL prioritas tertinggi, fetch paralel.
@@ -201,28 +231,29 @@ def _crawl(start_url: str, deadline: float, existing: set[str] | None = None,
             # chunk-nya di-skip supaya tidak duplikat path.
             batch, frontier = [], []
             for url in sorted(queue, key=prio):  # prio 0 dulu (ascending)
-                if url in seen:
+                n = norm_path(url)  # A8: dedupe by normalized path (.html/slash)
+                if n in seen:
                     continue
                 if len(batch) >= 4:
                     break
-                batch.append(url)
-                seen.add(url)
-            queue = [u for u in queue if u not in set(batch)]
+                batch.append((url, n))
+                seen.add(n)
+            queue = [u for u in queue if norm_path(u) not in seen]
             if not batch:
                 break
-            for url, (text, html) in zip(batch, ex.map(page, batch)):
+            for (url, n), (text, html) in zip(batch, ex.map(page, [u for u, _ in batch])):
                 if not text:
                     continue
-                if url not in existing:
+                if n not in existing:
                     title = re.sub(r"^#+\s*", "", text.splitlines()[0])[:80] if text.splitlines() else url
                     for c in chunk_text(text):
-                        out.append({"path": url, "title": title, "text": c})
+                        out.append({"path": n, "title": title, "text": c})
                     if len(out) >= 200:
                         break
                 # link internal; relatif ke HALAMAN INI (bukan base) -> path benar
                 nxt = []
                 for href in re.findall(r'href="([^"#?]+)', html):
-                    u = up.urljoin(url, href)
+                    u = norm_path(up.urljoin(url, href))
                     if (_path_allowed(u, base) and u not in seen
                             and not any(s in u for s in ("_static", "_sources", "genindex", "search.html", "404", "whatsnew/", "release/"))):
                         nxt.append(u)

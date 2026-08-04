@@ -211,13 +211,13 @@
   },
   "openai": {
     "repo": "openai/openai-python",
-    "docs_url": "https://platform.openai.com/docs",
+    "docs_url": "https://developers.openai.com/api/docs",
     "trust": 95.0,
     "latest_ver": ""
   },
   "anthropic": {
     "repo": "anthropics/anthropic-sdk-python",
-    "docs_url": "https://docs.anthropic.com",
+    "docs_url": "https://platform.claude.com/docs",
     "trust": 95.0,
     "latest_ver": ""
   },
@@ -253,7 +253,8 @@
   },
   "express": {
     "docs_url": "https://expressjs.com",
-    "trust": 95
+    "trust": 95,
+    "repo": "expressjs/express"
   },
   "sqlalchemy": {
     "repo": "sqlalchemy/sqlalchemy",
@@ -275,7 +276,8 @@
   },
   "litestar": {
     "docs_url": "https://docs.litestar.dev/latest/",
-    "trust": 95
+    "trust": 95,
+    "repo": "litestar-org/litestar"
   },
   "pydantic": {
     "repo": "pydantic/pydantic",

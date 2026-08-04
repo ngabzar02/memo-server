@@ -50,6 +50,11 @@ def init(conn: sqlite3.Connection) -> None:
         conn.commit()
     except sqlite3.OperationalError:
         pass  # kolom sudah ada
+    try:  # migrasi: A2 re-crawl — kapan lib terakhir di-re-crawl (cooldown 1 jam)
+        conn.execute("ALTER TABLE libs ADD COLUMN recrawl_at TEXT DEFAULT ''")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # kolom sudah ada
     conn.execute(
         """CREATE TABLE IF NOT EXISTS chunks (
             id INTEGER PRIMARY KEY AUTOINCREMENT, lib_id TEXT, ver TEXT,
@@ -89,6 +94,14 @@ def drop_lib(conn: sqlite3.Connection, lib_id: str) -> None:
     conn.commit()
 
 
+def _path_variants(p: str) -> set[str]:
+    """A8: semua bentuk path yg merujuk halaman sama (/x, /x/, /x.html)."""
+    base = p.rstrip("/")
+    if base.endswith(".html"):
+        base = base[:-5]
+    return {p, base, base + ".html", base + "/"}
+
+
 def add_chunks(conn: sqlite3.Connection, lib_id: str, ver: str, chunks: list[dict], embeddings: list[list[float] | None] | None = None) -> None:
     """chunks: [{path, title, text}]; embeddings aligned with chunks (384-dim).
     UPSERT per path: partial re-ingest (deadline) menambah, tidak menghapus
@@ -96,10 +109,12 @@ def add_chunks(conn: sqlite3.Connection, lib_id: str, ver: str, chunks: list[dic
     tetap tersimpan + searchable; vec lama utk path itu dihapus, chunk lain
     yang tak disentuh mempertahankan vec-nya)."""
     assert embeddings is None or len(chunks) == len(embeddings), "chunks/embeddings length mismatch"
-    paths = {c["path"] for c in chunks}
-    for path in paths:  # hapus versi lama sekali di awal — bukan per chunk,
-        for (oid,) in conn.execute(  # kalau per chunk: 1 file llms (100+ chunk
-            "SELECT id FROM chunks WHERE lib_id=? AND path=?", (lib_id, path)  # per path) saling menghapus
+    vpaths = set()  # A8: hapus versi lama + path-variants (.html/slash) sekali
+    for ch in chunks:  # di awal — bukan per chunk,
+        vpaths |= _path_variants(ch["path"])  # kalau per chunk: 1 file llms (100+ chunk
+    for path in vpaths:  # per path) saling menghapus
+        for (oid,) in conn.execute(
+            "SELECT id FROM chunks WHERE lib_id=? AND path=?", (lib_id, path)
         ).fetchall():
             conn.execute("DELETE FROM chunks_fts WHERE rowid=?", (oid,))
             conn.execute("DELETE FROM chunks_vec WHERE rowid=?", (oid,))
@@ -125,10 +140,23 @@ def add_chunks(conn: sqlite3.Connection, lib_id: str, ver: str, chunks: list[dic
 
 # --- read -----------------------------------------------------------------
 
-def search(conn: sqlite3.Connection, lib_id: str, query: str, k: int = 5, query_vec: list[float] | None = None, rrf_k: int = 60) -> list[dict]:
+def _section_title(text: str) -> str:
+    """B: heading pertama (H1-H4) sbg section_title — chunk_text menyimpan
+    heading sbg breadcrumb di baris pertama tiap section."""
+    for ln in text.splitlines()[:3]:
+        m = re.match(r"^#{1,4}\s+(.*)$", ln)
+        if m:
+            return m.group(1).strip()[:80]
+    return ""
+
+
+def search(conn: sqlite3.Connection, lib_id: str, query: str, k: int = 5, query_vec: list[float] | None = None, rrf_k: int = 60, version: str = "") -> list[dict]:
     """Hybrid: FTS5 BM25 + vector via RRF (reciprocal rank fusion, rrf_k=60).
     AND dulu utk presisi; OR fallback utk recall (benchmark: numpy 0 hasil
-    pd AND — banyak docs pakai istilah berbeda utk konsep sama)."""
+    pd AND — banyak docs pakai istilah berbeda utk konsep sama).
+    A7: version=... soft filter — chunk ber-label ver==version diutamakan di
+    atas (dan chunk ver='' tetap ikut), tidak pernah membuang semua hasil.
+    B: output + section_title/tokens/score (score RRF utk rank relatif)."""
     fts_terms = re.findall(r"[A-Za-z0-9_]+", query)
     if not fts_terms:
         fts_and = fts_or = ""
@@ -156,18 +184,36 @@ def search(conn: sqlite3.Connection, lib_id: str, query: str, k: int = 5, query_
         if not ranked:
             return []
     fused: dict[int, float] = {}
-    for cid in ranked:
-        fused[cid] = fused.get(cid, 0.0) + 1.0 / (rrf_k + len(fused))  # RRF: rank urut
+    for cid in ranked:  # RRF: ditebak 1/(rrf_k+rank); doc yg ada di FTS & vec dihitung 2x
+        fused[cid] = fused.get(cid, 0.0) + 1.0 / (rrf_k + len(fused))
     if vec_drop:
         fused = {cid: s for cid, s in fused.items() if cid not in vec_drop}
-    top = [cid for cid, _ in sorted(fused.items(), key=lambda kv: kv[1], reverse=True)[:k]]
-    rows = conn.execute(
-        f"SELECT id, path, title, text FROM chunks WHERE id IN ({','.join('?'*len(top))})",
-        top,
-    ).fetchall()
+    limit = k * 3 if version else k  # A7: ambil lebih utk compensasi filter
+    top = [cid for cid, _ in sorted(fused.items(), key=lambda kv: kv[1], reverse=True)[:limit]]
+    if not top:
+        return []
+    sql = f"SELECT id, path, title, text, ver FROM chunks WHERE id IN ({','.join('?'*len(top))})"
+    params: list = list(top)
+    if version:  # soft: ver==version ATAU ver kosong (di-ingest sbg latest saat itu)
+        sql += " AND (? = '' OR ver = ? OR ver = '')"
+        params += [version, version]
+    rows = conn.execute(sql, params).fetchall()
     byid = {r[0]: r for r in rows}
-    return [{"id": cid, "path": byid[cid][1], "title": byid[cid][2], "text": byid[cid][3]}
-            for cid in top if cid in byid]
+    out = []
+    for cid in top:
+        r = byid.get(cid)
+        if not r:
+            continue
+        text = r[3]
+        out.append({"id": cid, "path": r[1], "title": r[2], "text": text,
+                    "section_title": _section_title(text),
+                    "tokens": len(text) // 4, "score": round(fused[cid], 4),
+                    "_ver": r[4]})
+    if version:
+        out.sort(key=lambda h: h["_ver"] != version)  # ver cocok paling atas
+    for h in out:
+        h.pop("_ver", None)
+    return out[:k]
 
 
 def _fts_ranks(conn: sqlite3.Connection, lib_id: str, fts_query: str, limit: int = 20) -> list[int]:
@@ -183,7 +229,7 @@ def get_lib(conn: sqlite3.Connection, lib_id: str) -> dict | None:
     if not r:
         return None
     cols = ["id", "name", "repo", "docs_url", "trust", "latest_ver", "versions",
-            "full", "etag", "last_check"]
+            "full", "etag", "last_check", "recrawl_at"]
     return dict(zip(cols, r))
 
 
@@ -193,11 +239,14 @@ def get_versions(conn: sqlite3.Connection, lib_id: str) -> list[str]:
 
 
 def trim_to_tokens(chunks: list[dict], max_tokens: int = MAX_TOKENS) -> list[dict]:
-    """Cap returned chunks ~4 chars/token rough estimate."""
+    """Cap returned chunks ~4 chars/token rough estimate. A6: chunk oversize
+    DIPOTONG ke sisa budget (dulu dibuang seluruhnya), isi awal dipertahankan."""
     budget, out = max_tokens * 4, []
     for c in chunks:
+        if budget <= 0:
+            break
         if len(c["text"]) > budget:
-            continue  # skip chunk oversize, tetap kirim sisanya
+            c["text"] = c["text"][:budget]
         out.append(c)
         budget -= len(c["text"])
     return out
@@ -219,7 +268,7 @@ def _demo() -> None:
     add_chunks(conn, "flask", "3.1.0", chunks, emb)
     hits = search(conn, "flask", "framework", k=2)
     assert hits and hits[0]["title"] == "Intro", f"BM25 hybrid failed: {hits}"
-    assert trim_to_tokens([{"text": "x" * 20000}, {"text": "ok"}]) == [{"text": "ok"}], "trim failed"
+    assert trim_to_tokens([{"text": "x" * 20000}, {"text": "ok"}])[0]["text"] == "x" * 12000, "trim truncate failed"
     assert get_versions(conn, "flask") == ["3.1.0", "2.3.0"]
     hits2 = search(conn, "flask", "flask.route (decorator)", k=2)  # FTS5 escaping
     assert hits2, f"FTS5 escaping failed: {hits2}"

@@ -43,6 +43,8 @@ def _server_conn(monkeypatch, tmp_path):
 # --- SAB-3: docs_changed ---------------------------------------------------
 
 def test_docs_changed_drops_lib_on_url_change(monkeypatch, tmp_path):
+    """docs_url berubah -> lib TIDAK di-drop (data loss dulu: re-ingest budget
+    gagal -> 0 chunk permanen). URL di-update + full=0, chunk lama tetap ada."""
     conn = _server_conn(monkeypatch, tmp_path)
     store.upsert_lib(conn, {"id": "fastmcp", "name": "fastmcp", "repo": "",
                             "docs_url": "https://glama.ai/", "trust": 95.0,
@@ -51,9 +53,12 @@ def test_docs_changed_drops_lib_on_url_change(monkeypatch, tmp_path):
     monkeypatch.setattr(server.registry, "resolve",
                         lambda *a, **k: [{"docs_url": "https://gofastmcp.com/", "repo": ""}])
     assert server._docs_changed(conn, "fastmcp") is True
-    assert store.get_lib(conn, "fastmcp") is None  # drop_lib: chunk + lib hilang
+    lib = store.get_lib(conn, "fastmcp")
+    assert lib is not None  # dulu drop_lib: lib hilang -> 0 chunk
+    assert lib["docs_url"] == "https://gofastmcp.com/"  # URL baru terpasang
+    assert lib["full"] == 0  # trigger re-ingest bertahap
     n = conn.execute("SELECT COUNT(*) FROM chunks WHERE lib_id='fastmcp'").fetchone()[0]
-    assert n == 0
+    assert n == 1  # chunk lama dipertahankan sampai diganti (anti data loss)
 
 
 def test_docs_changed_false_when_url_same(monkeypatch, tmp_path):
@@ -112,8 +117,30 @@ def test_get_docs_empty_query_explicit_response(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "_embeddings", lambda: _FakeEmbed(N))
     monkeypatch.setattr(server.registry, "resolve", lambda *a, **k: [])
     monkeypatch.setattr(server.registry, "version_etag", lambda *a, **k: ("", "", []))
+    monkeypatch.setattr(server.registry, "docs_etag", lambda *a, **k: None)
     monkeypatch.setattr(server, "_rerank", lambda q, hits, top_n=10: hits)
     assert server.get_docs("flask", "") == []
+
+
+# --- A1+C: ingest 0 halaman -> full=0 + guidance (bukan [] senyap) ----------
+
+def test_get_docs_ingest_empty_guidance(monkeypatch, tmp_path):
+    """A1+C: lib baru yg ingest-nya 0 halaman (astro: anti-bot/SPA) -> full
+    dikoreksi ke 0 (dulu sandera full=1) + respon guidance, BUKAN [] senyap."""
+    conn = _server_conn(monkeypatch, tmp_path)
+    store.upsert_lib(conn, {"id": "astro", "name": "astro", "repo": "withastro/astro",
+                            "docs_url": "https://docs.astro.build",
+                            "trust": 95.0, "latest_ver": "7.1.6",
+                            "versions": json.dumps(["7.1.6"])})
+    monkeypatch.setattr(server, "_embeddings", lambda: _FakeEmbed(P))
+    monkeypatch.setattr(server.registry, "resolve", lambda *a, **k: [])
+    monkeypatch.setattr(server.registry, "version_etag", lambda *a, **k: ("", "", []))
+    monkeypatch.setattr(server.registry, "docs_etag", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_rerank", lambda q, hits, top_n=10: hits)
+    monkeypatch.setattr(server.ingest, "ingest_lib", lambda *a, **k: ([], True))
+    out = server.get_docs("astro", "hooks")
+    assert out and out[0]["title"] == "Guidance"
+    assert store.get_lib(conn, "astro")["full"] == 0  # re-ingest di call berikutnya
 
 
 # --- SAB-8: fallback rerank (xfail backlog P0-04) ---------------------------
@@ -134,6 +161,24 @@ def test_rerank_fallback_logs_metric(monkeypatch):
     server._rerank("some query", [{"text": "a"}, {"text": "b"}])
     assert any("rerank" in json.dumps(e).lower() for e in events), \
         "metrik fallback rerank tidak dicatat di activity log"
+
+
+def test_pick_cache_release_skips_stale_manual():
+    """Release manual `cache-latest` (asset docs.db) muncul lebih dulu di API —
+    jangan dipakai; pilih release `memo-cache.db.gz` TERBARU (by created_at)."""
+    releases = [
+        {"tag_name": "cache-latest", "created_at": "2026-08-03T11:39:47Z",
+         "assets": [{"name": "docs.db", "size": 1}]},
+        {"tag_name": "cache-edc6c37", "created_at": "2026-08-03T16:38:41Z",
+         "assets": [{"name": "memo-cache.db.gz", "size": 2}]},
+        {"tag_name": "cache-b961c0f", "created_at": "2026-08-03T21:06:32Z",
+         "assets": [{"name": "memo-cache.db.gz", "size": 3}]},
+    ]
+    ver, asset = server._pick_cache_release(releases)
+    assert ver == "cache-b961c0f"
+    assert asset["size"] == 3
+    assert server._pick_cache_release(
+        [{"tag_name": "x", "created_at": "2026-01-01T00:00:00Z", "assets": []}]) is None
 
 
 # --- network path (skip default, jalan manual) ------------------------------

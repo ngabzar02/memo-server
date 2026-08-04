@@ -33,6 +33,22 @@ def _log_activity(entry: dict[str, Any]) -> None:
     except OSError:
         pass
 
+
+def _guidance(library_id: str, query: str, reason: str) -> list[dict[str, Any]]:
+    """C: pesan guidance alih-alih [] senyap saat kegagalan TINGKAT LIBRARY
+    (resolve gagal / ingest 0 halaman). Query-miss normal pada lib sehat tetap
+    []. Meniru semangat context7: 'Documentation not found or not finalized...'."""
+    texts = {
+        "resolve": ("Library not found or not registered. Check the spelling, or use "
+                    "'resolve_library_id' with the official package name (e.g. 'flask', 'nextjs')."),
+        "ingest": ("Documentation could not be fetched (site may be SPA/anti-bot). "
+                   "Try again later or use a different library."),
+    }
+    t = texts.get(reason, reason)
+    return [{"id": "guidance", "path": "", "title": "Guidance",
+             "text": t, "section_title": "Guidance", "tokens": len(t) // 4,
+             "score": 0.0}]
+
 # ingest embed+sqlite thread-safe (ORT concurrent run TERUJI 6-thread aman);
 # lock per-library hanya mencegah 2 ingest lib sama bersamaan.
 _lib_locks: dict[str, threading.Lock] = {}
@@ -47,6 +63,38 @@ _DOCS_CHANGED_TTL = 3600.0
 def _lock_for(lib_id: str) -> threading.Lock:
     with _lib_locks_guard:
         return _lib_locks.setdefault(lib_id, threading.Lock())
+
+
+_RECRAWL_COOLDOWN = 3600.0  # A2: 1 jam antar re-crawl per lib (anti hot-loop)
+_RECRAWL_MAX_AGE_DAYS = 7
+
+
+def _recrawl(conn: sqlite3.Connection, library_id: str, force: bool = False) -> bool:
+    """A2: bolehkah re-crawl lib SEKARANG? Cooldown 1 jam per lib. force
+    (query-miss) -> ya; selain itu ya bila konten lebih tua dari
+    _RECRAWL_MAX_AGE_DAYS (docs berubah tanpa versi berubah). Mencatat
+    recrawl_at (cooldown) sekali BERLAKU utk jalur force & age."""
+    from datetime import datetime
+    r = conn.execute("SELECT recrawl_at FROM libs WHERE id=?", (library_id,)).fetchone()
+    last = r[0] if r else ""
+    if last:
+        try:
+            if (datetime.utcnow() - datetime.fromisoformat(last)).total_seconds() < _RECRAWL_COOLDOWN:
+                return False
+        except ValueError:
+            pass
+    conn.execute("UPDATE libs SET recrawl_at=datetime('now') WHERE id=?", (library_id,))
+    conn.commit()
+    if force:
+        return True
+    r = conn.execute("SELECT MAX(fetched_at) FROM chunks WHERE lib_id=?", (library_id,)).fetchone()
+    if not r or not r[0]:
+        return True
+    try:
+        age_days = (datetime.utcnow() - datetime.fromisoformat(r[0])).total_seconds() / 86400
+        return age_days > _RECRAWL_MAX_AGE_DAYS
+    except ValueError:
+        return True
 
 
 def _embeddings():
@@ -90,6 +138,8 @@ def _rerank(query: str, hits: list[dict[str, Any]], top_n: int = 10) -> list[dic
     try:
         scores = list(r.rerank(pairs))
         scored = sorted(zip(scores, hits[:top_n]), key=lambda s: -s[0])
+        for s, h in scored:  # B: ekspos skor cross-encoder ke output chunk
+            h["score"] = round(float(s), 4)
         return [h for _, h in scored] + hits[top_n:]
     except Exception as e:  # noqa: BLE001
         log.warning("rerank failed: %s", str(e)[:100])
@@ -159,13 +209,16 @@ def _get_docs(library_id: str, query: str, version: str | None = None,
         if _docs_changed(conn, library_id):
             lib = store.get_lib(conn, library_id)  # di-drop -> None
     if lib and not version:
-        _maybe_refresh(conn, lib)  # freshness: versi baru -> drop chunks (re-ingest)
+        _maybe_refresh(conn, lib)  # freshness: versi baru / etag docs berubah
     has_chunks = lib is not None and chunk_count > 0
     full = (lib or {}).get("full", 1)
     if not lib:
         cands = registry.resolve(library_id, query)
         if not cands:
-            return []
+            _log_activity({"t": time.time(), "tool": "get_docs", "lib": library_id,
+                           "q": query, "ver": version or "", "ms": round((time.monotonic() - t0) * 1000),
+                           "reason": "resolve_empty", "top": []})
+            return _guidance(library_id, query, "resolve")
         lib = cands[0]
         lib["versions"] = json.dumps([lib["latest_ver"]] if lib.get("latest_ver") else [])
         store.upsert_lib(conn, lib)
@@ -173,21 +226,29 @@ def _get_docs(library_id: str, query: str, version: str | None = None,
     ver = version or lib.get("latest_ver") or ""
     vec = _embeddings().embed([query])
     query_vec = [float(x) for x in list(vec)[0]]  # numpy float32 -> float, utk json.dumps
-    hits = store.search(conn, library_id, query, k=10, query_vec=query_vec)
-    if not has_chunks or (not version and not full):
+    crawl_deadline = deadline - 2 if deadline else None  # FTS instan: sisakan utk index+search
+    hits = store.search(conn, library_id, query, k=10, query_vec=query_vec,
+                        version=version or "")
+    # A2: re-crawl umur (docs berubah tanpa versi berubah) utk lib penuh;
+    # lib baru / ingest parsial (full=0) tetap di jalur lama.
+    stale = lib is not None and not version and _recrawl(conn, library_id)
+    if not has_chunks or (not version and not full) or stale:
         # lib baru / ingest parsial (deadline tercapai sebelumnya): fetch+index
-        # lanjutan. hits kosong pd lib lengkap TIDAK memicu re-ingest.
-        crawl_deadline = deadline - 2 if deadline else None  # FTS instan: sisakan utk index+search
-        existing = {r[0] for r in conn.execute(
+        # lanjutan. hits kosong pd lib lengkap TIDAK memicu re-ingest (A2
+        # query-miss ditangani di bawah, dgn cooldown 1 jam).
+        existing = {ingest.norm_path(r[0]) for r in conn.execute(
             "SELECT path FROM chunks WHERE lib_id=?", (library_id,))}
         chunks, complete = ingest.ingest_lib(
             lib.get("docs_url") or f"https://{lib.get('repo','')}",
             deadline=crawl_deadline, existing=existing, query=query)
         if not chunks:
-            if not has_chunks:
-                return []
             conn.execute("UPDATE libs SET full=? WHERE id=?", (1 if ingest.is_full(complete, len(chunks)) else 0, library_id))
             conn.commit()
+            if not has_chunks:  # A1: lib baru 0 halaman — full=0 + log + guidance
+                _log_activity({"t": time.time(), "tool": "get_docs", "lib": library_id,
+                               "q": query, "ver": ver, "ms": round((time.monotonic() - t0) * 1000),
+                               "reason": "ingest_empty", "top": []})
+                return _guidance(library_id, query, "ingest")
         else:
             chunks = chunks[:200]  # cap: 200 embed ~3 menit di ARM; cukup utk top docs
             if deadline is None:
@@ -203,7 +264,24 @@ def _get_docs(library_id: str, query: str, version: str | None = None,
                 store.add_chunks(conn, library_id, ver, chunks)
             conn.execute("UPDATE libs SET full=? WHERE id=?", (1 if ingest.is_full(complete, len(chunks)) else 0, library_id))
             conn.commit()
-        hits = store.search(conn, library_id, query, k=10, query_vec=query_vec)
+        hits = store.search(conn, library_id, query, k=10, query_vec=query_vec,
+                            version=version or "")
+    # A2: query-miss pd lib lengkap -> 1x re-crawl dgn kata kunci query
+    # (cooldown 1 jam; crawl prioritaskan URL yg match query).
+    if not hits and has_chunks and full and not version \
+            and _recrawl(conn, library_id, force=True):
+        existing = {ingest.norm_path(r[0]) for r in conn.execute(
+            "SELECT path FROM chunks WHERE lib_id=?", (library_id,))}
+        chunks, complete = ingest.ingest_lib(
+            lib.get("docs_url") or f"https://{lib.get('repo','')}",
+            deadline=crawl_deadline, existing=existing, query=query)
+        if chunks:
+            store.add_chunks(conn, library_id, ver, chunks)
+            conn.execute("UPDATE libs SET full=? WHERE id=?",
+                         (1 if ingest.is_full(complete, len(chunks)) else 0, library_id))
+            conn.commit()
+            hits = store.search(conn, library_id, query, k=10,
+                                query_vec=query_vec, version=version or "")
     hits = _rerank(query, hits)
     _log_activity({"t": time.time(), "tool": "get_docs", "lib": library_id,
                    "q": query, "ver": ver, "ms": round((time.monotonic() - t0) * 1000),
@@ -228,7 +306,15 @@ def _docs_changed(conn: sqlite3.Connection, library_id: str) -> bool:
     old_url = lib.get("docs_url") or f"https://{lib.get('repo', '')}"
     _docs_changed_cache[library_id] = now
     if new_url != old_url:
-        store.drop_lib(conn, library_id)
+        # JANGAN drop_lib: pola re-ingest budget 30s yg gagal meninggalkan lib
+        # 0 chunk permanen (pengalaman sama di _maybe_refresh — DELETE dulu
+        # terbukti merugikan). Update URL + full=0 -> get_docs berikutnya
+        # re-ingest bertahap dari URL baru; chunk lama tetap melayani sampai
+        # diganti per-path (add_chunks UPSERT). Path lama yang tak tergantikan
+        # tersisa (stale) — trade-off: data > kebersihan.
+        conn.execute("UPDATE libs SET docs_url=?, full=0 WHERE id=?",
+                     (new_url, library_id))
+        conn.commit()
         return True
     return False
 
@@ -258,6 +344,17 @@ def _maybe_refresh(conn: sqlite3.Connection, lib: dict) -> bool:
         # gagal deadline 20s -> lib jadi 0 chunk.
         conn.commit()
         return True
+    # A9: lib tanpa sumber versi (version_etag -> latest="") — docs bisa berubah
+    # tanpa versi berubah. Probe etag llms.txt/docs_url: berubah -> full=0
+    # (re-ingest bertahap). Baseline pertama (etag='') hanya disimpan.
+    old = lib.get("etag", "")
+    et = registry.docs_etag(lib.get("docs_url", ""), old) if lib.get("docs_url") else None
+    if et is not None and et != old:
+        if old:
+            conn.execute("UPDATE libs SET etag=?, full=0 WHERE id=?", (et, lib["id"]))
+        else:
+            conn.execute("UPDATE libs SET etag=? WHERE id=?", (et, lib["id"]))
+        conn.commit()
     return False
 
 
@@ -323,6 +420,18 @@ def _build_cache(limit: int | None = None) -> None:
 _CACHE_REPO = os.environ.get("MEMO_CACHE_REPO", "ngabzar02/memo-server")
 
 
+def _pick_cache_release(releases: list[dict]) -> tuple[str, dict] | None:
+    """Pilih release cache TERBARU yang punya asset `memo-cache.db.gz`.
+    Ada release manual `cache-latest` (asset `docs.db`) yang bisa muncul lebih
+    dulu di urutan API — tidak boleh dipakai (bug: fetch terkunci di versi lama).
+    Urutkan by created_at desc, asset yang benar baru dipakai."""
+    for rel in sorted(releases, key=lambda r: r.get("created_at", ""), reverse=True):
+        a = next((x for x in rel.get("assets", []) if x["name"] == "memo-cache.db.gz"), None)
+        if a:
+            return rel["tag_name"], a
+    return None
+
+
 def _fetch_cache(force: bool = False, dry_run: bool = False) -> int:
     """`--fetch-cache`: unduh pre-built docs.db dari GitHub release terbaru.
     Asset: memo-cache.db.gz. Backup DB lama -> verifikasi integrity -> ganti.
@@ -331,10 +440,10 @@ def _fetch_cache(force: bool = False, dry_run: bool = False) -> int:
     import shutil
     import urllib.request
 
-    api = f"https://api.github.com/repos/{_CACHE_REPO}/releases?per_page=1"
+    page = f"https://api.github.com/repos/{_CACHE_REPO}/releases?per_page=10"
     try:
         with urllib.request.urlopen(urllib.request.Request(
-                api, headers={"User-Agent": "memo"}), timeout=30) as r:
+                page, headers={"User-Agent": "memo"}), timeout=30) as r:
             releases = json.load(r)
     except Exception as e:  # noqa: BLE001
         print(f"cache: gagal cek release: {str(e)[:100]}", file=sys.stderr)
@@ -342,28 +451,11 @@ def _fetch_cache(force: bool = False, dry_run: bool = False) -> int:
     if not releases:
         print("cache: tidak ada release", file=sys.stderr)
         return 1
-    ver = releases[0]["tag_name"]
-    asset = next((a for a in releases[0].get("assets", [])
-                  if a["name"] == "memo-cache.db.gz"), None)
-    if not asset:
-        # release terbaru bisa saja tanpa asset (tag manual); cari release
-        # sebelumnya yang punya asset (max 10)
-        page = f"https://api.github.com/repos/{_CACHE_REPO}/releases?per_page=10"
-        try:
-            with urllib.request.urlopen(urllib.request.Request(
-                    page, headers={"User-Agent": "memo"}), timeout=30) as r:
-                releases = json.load(r)
-        except Exception:  # noqa: BLE001
-            releases = []
-        for rel in releases:
-            a = next((x for x in rel.get("assets", [])
-                      if x["name"] == "memo-cache.db.gz"), None)
-            if a:
-                ver, asset = rel["tag_name"], a
-                break
-    if not asset:
+    picked = _pick_cache_release(releases)
+    if not picked:
         print("cache: tidak ada release dengan asset memo-cache.db.gz", file=sys.stderr)
         return 1
+    ver, asset = picked
     ver_file = Path(store.DEFAULT_DB).parent / "cache.version"
     cur = ver_file.read_text().strip() if ver_file.exists() else ""
     if not force and cur == ver:

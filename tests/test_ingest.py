@@ -27,6 +27,25 @@ def test_chunk_text_heading_aware():
     assert any(c.startswith("## Sub A") for c in chunks)
 
 
+def test_chunk_text_code_fence_parity():
+    """Heading SETELAH ``` ditutup harus jadi section baru (fence parity).
+    Dulu any() atas cur[] mengunci semua baris sesudah fence pertama sbg code."""
+    text = "```python\n# bukan heading (dalam code)\nprint(1)\n```\n\n## Sub A\nmore"
+    chunks = ingest.chunk_text(text)
+    assert any(c.startswith("## Sub A") for c in chunks), \
+        "heading setelah fence tertutup tidak jadi section sendiri"
+
+
+def test_chunk_text_large_input_fast():
+    """Regresi O(n^2): halaman 20k baris pernah ~45s (scan cur[] per baris);
+    inkremental harus jauh di bawah batas. Batas longgar anti-flaky di CI."""
+    import time
+    text = "\n".join(f"line {i} body words {i}" for i in range(20_000))
+    t0 = time.monotonic()
+    ingest.chunk_text(text)
+    assert time.monotonic() - t0 < 10
+
+
 def test_chunk_text_respects_cap():
     text = "\n\n".join(f"Para {i} " + "B." * 400 for i in range(20))
     chunks = ingest.chunk_text(text)
@@ -72,6 +91,30 @@ def test_looks_404():
     assert not ingest._looks_404("This is a completely normal documentation page "
                                  "with lots of useful content about how things work. "
                                  "It contains multiple sentences and is longer.")
+
+
+def test_norm_path_dedupes_html_and_slash():
+    """A8: /overview.html, /overview/, /overview -> satu bentuk (dedupe)."""
+    assert ingest.norm_path("https://x.dev/a/overview.html") == \
+        ingest.norm_path("https://x.dev/a/overview/") == \
+        ingest.norm_path("https://x.dev/a/overview")
+    assert ingest.norm_path("https://x.dev/") == "https://x.dev/"
+
+
+def test_norm_path_keeps_query_free_query():
+    assert "?" not in ingest.norm_path("https://x.dev/page.html?tab=1")
+
+
+def test_textual_rejects_binary_assets():
+    """A11: css/js/png dll ditolak (dulu meracuni korpus tailwind & httpx)."""
+    assert ingest._textual("text/html; charset=utf-8")
+    assert ingest._textual("text/plain")
+    assert ingest._textual("application/xml")
+    assert ingest._textual("")          # server lama tanpa content-type: dianggap teks
+    assert not ingest._textual("image/png")
+    assert not ingest._textual("text/css")
+    assert not ingest._textual("application/javascript")
+    assert not ingest._textual("font/woff2")
 
 
 def test_is_full():

@@ -27,22 +27,22 @@ def _lib(conn, lib_id="flask", name="Flask", docs_url="https://flask.palletsproj
                             "versions": json.dumps(["3.1.0", "2.3.0"])})
 
 
-def test_trim_skips_oversize_keeps_small(tmp_db):
-    """SAB-1: chunk 20k char di-skip (oversize > budget 12k char), chunk kecil
-    tetap terkirim — bukan break yang membuang semua sisa."""
+def test_trim_truncates_oversize_not_drop(tmp_db):
+    """A6: chunk 20k char DIPOTONG ke budget (12k char), isi awal dipertahankan
+    — dulu dibuang seluruhnya (SAB-1 skip)."""
     out = store.trim_to_tokens(
-        [{"text": "x" * 20000}, {"text": "ok"}, {"text": "small"}], max_tokens=3000)
-    assert out == [{"text": "ok"}, {"text": "small"}]
+        [{"text": "x" * 20000}, {"text": "ok"}], max_tokens=3000)
+    assert len(out) == 1 and len(out[0]["text"]) == 12000
+    assert out[0]["text"].startswith("x")
 
 
 def test_trim_budget_respected(tmp_db):
-    """Budget 3000 token (~12000 char): akumulasi sampai habis, sisanya di-skip."""
+    """Budget 3000 token (~12000 char): akumulasi sampai habis, lalu berhenti."""
     big = {"text": "a" * 7000}   # 7000 <= 12000 -> masuk, sisa 5000
-    mid = {"text": "b" * 6000}   # 6000 > 5000 -> di-skip
-    small = {"text": "c" * 100}  # 100 <= 5000 -> masuk, sisa 4900
-    last = {"text": "d" * 4901}  # 4901 > 4900 -> di-skip
-    out = store.trim_to_tokens([big, mid, small, last], max_tokens=3000)
-    assert out == [big, small]
+    mid = {"text": "b" * 6000}   # 6000 > 5000 -> dipotong ke 5000, budget habis
+    small = {"text": "c" * 100}
+    out = store.trim_to_tokens([big, mid, small], max_tokens=3000)
+    assert [len(c["text"]) for c in out] == [7000, 5000]
 
 
 def test_search_rrf_orders_by_fusion(tmp_db):
@@ -112,3 +112,44 @@ def test_search_drops_irrelevant_below_relative_threshold(tmp_db):
     ], [P, N])
     hits = store.search(tmp_db, "flask", "alpha", k=5, query_vec=P)
     assert [h["path"] for h in hits] == ["relevant.md"]
+
+
+def test_search_output_meta_fields(tmp_db):
+    """B: chunk output punya section_title (heading pertama), tokens (len/4),
+    score (RRF) — metadata utk agent memilih & menghitung budget."""
+    _lib(tmp_db)
+    store.add_chunks(tmp_db, "flask", "3.1.0", [
+        {"path": "intro.md", "title": "Intro",
+         "text": "# Welcome\n\nFlask is a micro web framework for Python."},
+    ])
+    hit = store.search(tmp_db, "flask", "framework", k=5)[0]
+    assert hit["section_title"] == "Welcome"
+    assert hit["tokens"] == len(hit["text"]) // 4
+    assert isinstance(hit["score"], float)
+
+
+def test_add_chunks_variants_dedupe_html(tmp_db):
+    """A8: add_chunks menghapus versi path-variants — '/x.html' lama diberihkan
+    saat '/x' di-re-add (dan sebaliknya), tidak jadi duplikat."""
+    store.add_chunks(tmp_db, "flask", "1.0", [{"path": "overview.html", "title": "Ov", "text": "v1"}])
+    store.add_chunks(tmp_db, "flask", "1.0", [{"path": "overview", "title": "Ov", "text": "v2"}])
+    rows = tmp_db.execute("SELECT path, text FROM chunks ORDER BY path").fetchall()
+    assert rows == [("overview", "v2")]
+
+
+def test_search_version_soft_and_prefers(tmp_db):
+    """A7: version=... memprioritaskan chunk ber-label cocok, tetap menyertakan
+    ver='' (di-ingest sbg latest saat itu); ver lain di-exclude."""
+    _lib(tmp_db)
+    store.add_chunks(tmp_db, "flask", "3.1.0", [
+        {"path": "new.md", "title": "New", "text": "flask route for 3.1"},
+    ])
+    store.add_chunks(tmp_db, "flask", "2.3.0", [
+        {"path": "old.md", "title": "Old", "text": "flask deprecated route"},
+    ])
+    store.add_chunks(tmp_db, "flask", "", [
+        {"path": "base.md", "title": "Base", "text": "flask general route"},
+    ])
+    hits = store.search(tmp_db, "flask", "flask route", k=5, version="3.1.0")
+    assert hits[0]["path"] == "new.md"   # ver cocok di atas
+    assert {h["path"] for h in hits} == {"new.md", "base.md"}  # '' tetap ikut

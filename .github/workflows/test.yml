@@ -17,7 +17,7 @@ jobs:
         run: |
           pip install .[test]
           pip install ruff
-      - name: Lint (pyflakes F: unused/undefined/format — bukan gaya)
+      - name: "Lint (pyflakes F hanya — unused/undefined, bukan gaya)"
         run: ruff check -q --select F src tests bench
       - name: Selfcheck
         run: |

@@ -1,0 +1,763 @@
+{
+ "ts": "2026-08-04T12:13:04",
+ "libs": 54,
+ "scored": 46,
+ "hit@1": 0.413,
+ "hit@3": 0.174,
+ "hit@5": 0.065,
+ "seconds": 48.6,
+ "per_lib": [
+  {
+   "library_name": "fastapi",
+   "query": "dependency injection with Depends for authentication",
+   "frags": [
+    "reference/dependencies"
+   ],
+   "hit@1": true,
+   "hit@3": true,
+   "hit@5": true,
+   "paths": [
+    "https://fastapi.tiangolo.com/tutorial/dependencies",
+    "https://fastapi.tiangolo.com/features",
+    "https://fastapi.tiangolo.com/",
+    "https://fastapi.tiangolo.com/reference/security",
+    "https://fastapi.tiangolo.com/reference/dependencies"
+   ]
+  },
+  {
+   "library_name": "numpy",
+   "query": "broadcasting rules for array arithmetic",
+   "frags": [
+    "basics.broadcasting"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "https://numpy.org/arraycomputing",
+    "https://numpy.org/pt",
+    "https://numpy.org/",
+    "https://numpy.org/history"
+   ]
+  },
+  {
+   "library_name": "requests",
+   "query": "session reuse and connection pooling",
+   "frags": [
+    "user/advanced"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "https://requests.readthedocs.io/stable"
+   ]
+  },
+  {
+   "library_name": "express",
+   "query": "routing with express.Router middleware",
+   "frags": [
+    "guide/routing"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "Guides (v5) (https://expressjs.com/llms/guides-5x.txt)"
+   ]
+  },
+  {
+   "library_name": "flask",
+   "query": "quickstart routing and URL building",
+   "frags": [
+    "quickstart"
+   ],
+   "hit@1": true,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "https://flask.palletsprojects.com/quickstart",
+    "https://flask.palletsprojects.com/",
+    "https://flask.palletsprojects.com/en/stable",
+    "https://flask.palletsprojects.com/installation",
+    "https://flask.palletsprojects.com/tutorial/next"
+   ]
+  },
+  {
+   "library_name": "pandas",
+   "query": "groupby aggregate operations dataframe",
+   "frags": [
+    "reference/api/pandas.DataFrame.groupby"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "https://pandas.pydata.org/docs/user_guide/io.html"
+   ]
+  },
+  {
+   "library_name": "sqlalchemy",
+   "query": "select statements core expression tutorial",
+   "frags": [
+    "core/tutorial"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "http://docs.sqlalchemy.org/"
+   ]
+  },
+  {
+   "library_name": "pydantic",
+   "query": "model fields validation and types",
+   "frags": [
+    "concepts/models"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "Discriminated unions (https://docs.pydantic.dev/usage/types/#discriminated-unions-aka-tagg",
+    "`Config.smart_union` for better union logic (https://docs.pydantic.dev/usage/model_config/"
+   ]
+  },
+  {
+   "library_name": "react",
+   "query": "useState hook state management",
+   "frags": [
+    "reference/react/useState"
+   ],
+   "hit@1": true,
+   "hit@3": true,
+   "hit@5": false,
+   "paths": [
+    "https://react.dev/learn/state-a-components-memory.md",
+    "https://react.dev/reference/react/useState.md",
+    "https://react.dev/learn/thinking-in-react.md",
+    "https://react.dev/learn/adding-interactivity.md",
+    "https://react.dev/learn/extracting-state-logic-into-a-reducer.md"
+   ]
+  },
+  {
+   "library_name": "nextjs",
+   "query": "dynamic routes in the app router",
+   "frags": [
+    "api-reference/file-conventions/page"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "https://nextjs.org/docs/llms-full.txt",
+    "Installation (https://nextjs.org/docs/app/getting-started/installation)",
+    "Project Structure (https://nextjs.org/docs/app/getting-started/project-structure)"
+   ]
+  },
+  {
+   "library_name": "polars",
+   "query": "expressions for select and filter",
+   "frags": [
+    "reference/expressions"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "https://docs.pola.rs/user-guide/getting-started/",
+    "https://docs.pola.rs/api/python/stable/reference/dataframe/api/polars.dataframe.group_by.G",
+    "https://docs.pola.rs/api/python/stable/reference/lazyframe/api/polars.lazyframe.group_by.L",
+    "https://docs.pola.rs/",
+    "https://docs.pola.rs/api/python/stable/reference/dataframe/api/polars.dataframe.group_by.G"
+   ]
+  },
+  {
+   "library_name": "duckdb",
+   "query": "window functions in query syntax",
+   "frags": [
+    "docs/sql/query_syntax"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "https://duckdb.org/docs/current/sql/functions/window_functions",
+    "https://duckdb.org/docs/current/sql/query_syntax/qualify",
+    "https://duckdb.org/docs/current/sql/query_syntax/window",
+    "https://duckdb.org/docs/current/sql/query_syntax/select"
+   ]
+  },
+  {
+   "library_name": "prisma",
+   "query": "prisma schema models and relations",
+   "frags": [
+    "orm/prisma-schema"
+   ],
+   "hit@1": true,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "Prisma schema overview (https://www.prisma.io/docs/orm/prisma-schema/overview)",
+    "Prisma Client overview (https://www.prisma.io/docs/orm/prisma-client)",
+    "Quickstart with MySQL (https://www.prisma.io/docs/prisma-orm/quickstart/mysql)",
+    "Add Prisma ORM to an existing MongoDB project (https://www.prisma.io/docs/prisma-orm/add-t",
+    "Add Prisma ORM to an existing Prisma Postgres project (https://www.prisma.io/docs/prisma-o"
+   ]
+  },
+  {
+   "library_name": "tailwindcss",
+   "query": "grid template column utilities",
+   "frags": [
+    "grid-template-columns"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "https://tailwindcss.com/",
+    "https://tailwindcss.com/docs/hover-focus-and-other-states",
+    "https://tailwindcss.com/docs/styling-with-utility-classes",
+    "https://tailwindcss.com/docs/theme",
+    "https://tailwindcss.com/docs/upgrade-guide"
+   ]
+  },
+  {
+   "library_name": "fastmcp",
+   "query": "define a tool with the FastMCP decorator",
+   "error": "no_lib"
+  },
+  {
+   "library_name": "litestar",
+   "query": "routing and controllers in litestar",
+   "error": "no_lib"
+  },
+  {
+   "library_name": "sqlite-vec",
+   "query": "vector search with the sqlite-vec extension",
+   "error": "no_lib"
+  },
+  {
+   "library_name": "anthropic",
+   "query": "messages api streaming responses",
+   "error": "no_lib"
+  },
+  {
+   "library_name": "openai",
+   "query": "chat completions api usage",
+   "frags": [],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "Responses API (https://developers.openai.com/api/docs/guides/migrate-to-responses)",
+    "Prompt caching (https://developers.openai.com/api/docs/guides/prompt-caching)",
+    "The OpenAI Cookbook (https://developers.openai.com/cookbook)"
+   ]
+  },
+  {
+   "library_name": "click",
+   "query": "command options and arguments decorator",
+   "error": "no_lib"
+  },
+  {
+   "library_name": "vue",
+   "query": "template syntax directives",
+   "frags": [
+    "guide/essentials"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": []
+  },
+  {
+   "library_name": "django",
+   "query": "queryset filtering with Q objects",
+   "frags": [
+    "ref/models/querysets"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": []
+  },
+  {
+   "library_name": "numpy",
+   "query": "create arrays with numpy.zeros, numpy.ones, arange and linspace",
+   "frags": [
+    "reference/routines.array-creation"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "https://numpy.org/",
+    "https://numpy.org/case-studies/deeplabcut-dnn",
+    "https://numpy.org/about",
+    "https://numpy.org/pt",
+    "https://numpy.org/community"
+   ]
+  },
+  {
+   "library_name": "numpy",
+   "query": "what dtypes does numpy support and how do I pick one",
+   "frags": [
+    "reference/arrays.dtypes"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "https://numpy.org/news",
+    "https://numpy.org/pt/news",
+    "https://numpy.org/gethelp"
+   ]
+  },
+  {
+   "library_name": "numpy",
+   "query": "flatten a multi-dimensional array into one dimension",
+   "frags": [
+    "reference/generated/numpy.ndarray.flatten"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "https://numpy.org/arraycomputing",
+    "https://numpy.org/",
+    "https://numpy.org/pt",
+    "https://numpy.org/history",
+    "https://numpy.org/case-studies/blackhole-image"
+   ]
+  },
+  {
+   "library_name": "numpy",
+   "query": "read array shape, size, ndim and other ndarray attributes",
+   "frags": [
+    "reference/arrays.ndarray"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "https://numpy.org/arraycomputing",
+    "https://numpy.org/",
+    "https://numpy.org/pt",
+    "https://numpy.org/history",
+    "https://numpy.org/case-studies/cricket-analytics"
+   ]
+  },
+  {
+   "library_name": "httpx",
+   "query": "make your first GET request with httpx",
+   "frags": [
+    "quickstart"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "https://www.python-httpx.org/compatibility",
+    "https://www.python-httpx.org/environment_variables",
+    "https://www.python-httpx.org/exceptions",
+    "https://www.python-httpx.org/advanced/extensions",
+    "https://www.python-httpx.org/advanced/transports"
+   ]
+  },
+  {
+   "library_name": "httpx",
+   "query": "write a custom authentication flow with httpx Auth classes",
+   "frags": [
+    "advanced/authentication"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "https://www.python-httpx.org/third_party_packages",
+    "https://www.python-httpx.org/advanced/transports",
+    "https://www.python-httpx.org/advanced/extensions",
+    "https://www.python-httpx.org/compatibility"
+   ]
+  },
+  {
+   "library_name": "httpx",
+   "query": "set a timeout on an individual httpx request",
+   "frags": [
+    "advanced/timeouts"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "https://www.python-httpx.org/compatibility",
+    "https://www.python-httpx.org/advanced/extensions",
+    "https://www.python-httpx.org/exceptions",
+    "https://www.python-httpx.org/troubleshooting",
+    "https://www.python-httpx.org/logging"
+   ]
+  },
+  {
+   "library_name": "httpx",
+   "query": "route httpx requests through a proxy",
+   "frags": [
+    "advanced/proxies"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "https://www.python-httpx.org/environment_variables",
+    "https://www.python-httpx.org/advanced/transports",
+    "https://www.python-httpx.org/troubleshooting",
+    "https://www.python-httpx.org/advanced/extensions",
+    "https://www.python-httpx.org/third_party_packages"
+   ]
+  },
+  {
+   "library_name": "astro",
+   "query": "write markdown and render MDX inside astro pages",
+   "frags": [
+    "guides/markdown-content"
+   ],
+   "hit@1": true,
+   "hit@3": true,
+   "hit@5": true,
+   "paths": [
+    "https://docs.astro.build/en/guides/markdown-content",
+    "https://docs.astro.build/zh-tw/guides/markdown-content",
+    "https://docs.astro.build/hi/guides/markdown-content",
+    "https://docs.astro.build/zh-cn/guides/markdown-content"
+   ]
+  },
+  {
+   "library_name": "astro",
+   "query": "define a content collection with a schema in astro",
+   "frags": [
+    "guides/content-collections"
+   ],
+   "hit@1": true,
+   "hit@3": true,
+   "hit@5": false,
+   "paths": [
+    "https://docs.astro.build/hi/guides/content-collections",
+    "https://docs.astro.build/en/guides/content-collections"
+   ]
+  },
+  {
+   "library_name": "astro",
+   "query": "pull content from Contentful CMS into astro",
+   "frags": [
+    "guides/cms/contentful"
+   ],
+   "hit@1": true,
+   "hit@3": true,
+   "hit@5": true,
+   "paths": [
+    "https://docs.astro.build/en/guides/cms/contentful",
+    "https://docs.astro.build/hi/guides/cms/contentful",
+    "https://docs.astro.build/zh-tw/guides/cms/contentful",
+    "https://docs.astro.build/zh-cn/guides/cms/contentful"
+   ]
+  },
+  {
+   "library_name": "polars",
+   "query": "basic operations and binary expressions on polars columns",
+   "frags": [
+    "user-guide/expressions/basic-operations"
+   ],
+   "hit@1": true,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "https://docs.pola.rs/user-guide/expressions/basic-operations/",
+    "https://docs.pola.rs/api/python/stable/reference/dataframe/api/polars.DataFrame.group_by.h",
+    "https://docs.pola.rs/user-guide/getting-started/",
+    "https://docs.pola.rs/",
+    "https://docs.pola.rs/api/python/stable/reference/dataframe/api/polars.dataframe.group_by.G"
+   ]
+  },
+  {
+   "library_name": "polars",
+   "query": "group by one or more columns and aggregate with polars",
+   "frags": [
+    "api/python/stable/reference/dataframe/group_by"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "https://docs.pola.rs/api/python/stable/reference/dataframe/api/polars.dataframe.group_by.G",
+    "https://docs.pola.rs/api/python/stable/reference/dataframe/api/polars.dataframe.group_by.G",
+    "https://docs.pola.rs/api/python/stable/reference/lazyframe/api/polars.lazyframe.group_by.L",
+    "https://docs.pola.rs/api/python/stable/reference/lazyframe/api/polars.lazyframe.group_by.L",
+    "https://docs.pola.rs/api/python/stable/reference/dataframe/api/polars.dataframe.group_by.G"
+   ]
+  },
+  {
+   "library_name": "prisma",
+   "query": "prisma schema overview of models, fields, enums and relations",
+   "frags": [
+    "orm/prisma-schema/overview"
+   ],
+   "hit@1": true,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "Prisma schema overview (https://www.prisma.io/docs/orm/prisma-schema/overview)",
+    "Add Prisma ORM to an existing MongoDB project (https://www.prisma.io/docs/prisma-orm/add-t",
+    "Prisma Client overview (https://www.prisma.io/docs/orm/prisma-client)",
+    "Quickstart with MySQL (https://www.prisma.io/docs/prisma-orm/quickstart/mysql)",
+    "Add Prisma ORM to an existing Prisma Postgres project (https://www.prisma.io/docs/prisma-o"
+   ]
+  },
+  {
+   "library_name": "prisma",
+   "query": "query the database with prisma client findMany and create",
+   "frags": [
+    "orm/prisma-client"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "Add Prisma ORM to an existing MySQL project (https://www.prisma.io/docs/prisma-orm/add-to-",
+    "Add Prisma ORM to an existing PostgreSQL project (https://www.prisma.io/docs/prisma-orm/ad",
+    "Add Prisma ORM to an existing Prisma Postgres project (https://www.prisma.io/docs/prisma-o",
+    "Add Prisma ORM to an existing SQLite project (https://www.prisma.io/docs/prisma-orm/add-to",
+    "Prisma 7 quickstart (https://www.prisma.io/docs/prisma-orm/quickstart/prisma-postgres)"
+   ]
+  },
+  {
+   "library_name": "prisma",
+   "query": "generate and apply prisma migrate migrations",
+   "frags": [
+    "orm/prisma-migrate/getting-started"
+   ],
+   "hit@1": true,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "Prisma Migrate getting started (https://www.prisma.io/docs/orm/prisma-migrate/getting-star",
+    "Add Prisma ORM to an existing PostgreSQL project (https://www.prisma.io/docs/prisma-orm/ad",
+    "Add Prisma ORM to an existing MySQL project (https://www.prisma.io/docs/prisma-orm/add-to-",
+    "Add Prisma ORM to an existing SQLite project (https://www.prisma.io/docs/prisma-orm/add-to",
+    "Add Prisma ORM to an existing Prisma Postgres project (https://www.prisma.io/docs/prisma-o"
+   ]
+  },
+  {
+   "library_name": "pydantic",
+   "query": "how do discriminated unions work in pydantic",
+   "frags": [
+    "usage/types"
+   ],
+   "hit@1": true,
+   "hit@3": true,
+   "hit@5": false,
+   "paths": [
+    "`Config.smart_union` for better union logic (https://docs.pydantic.dev/usage/model_config/",
+    "Discriminated unions (https://docs.pydantic.dev/usage/types/#discriminated-unions-aka-tagg"
+   ]
+  },
+  {
+   "library_name": "pydantic",
+   "query": "enable smart_union in pydantic v2 model config",
+   "frags": [
+    "usage/model_config"
+   ],
+   "hit@1": true,
+   "hit@3": true,
+   "hit@5": false,
+   "paths": [
+    "Discriminated unions (https://docs.pydantic.dev/usage/types/#discriminated-unions-aka-tagg",
+    "`Config.smart_union` for better union logic (https://docs.pydantic.dev/usage/model_config/"
+   ]
+  },
+  {
+   "library_name": "requests",
+   "query": "how basic auth and digest auth work in requests",
+   "frags": [
+    "user/authentication"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "https://requests.readthedocs.io/stable"
+   ]
+  },
+  {
+   "library_name": "openai",
+   "query": "use built-in tools like web search and file search in the responses api",
+   "frags": [
+    "api/docs/guides/tools"
+   ],
+   "hit@1": true,
+   "hit@3": true,
+   "hit@5": false,
+   "paths": [
+    "Responses API (https://developers.openai.com/api/docs/guides/migrate-to-responses)",
+    "Built-in tools (https://developers.openai.com/api/docs/guides/tools)",
+    "`prompt_cache_key` (https://developers.openai.com/api/reference/resources/responses/method",
+    "terminal status (https://developers.openai.com/api/docs/assistants/deep-dive#runs-and-run-",
+    "The OpenAI Cookbook (https://developers.openai.com/cookbook)"
+   ]
+  },
+  {
+   "library_name": "openai",
+   "query": "cut costs with prompt caching on repeated prefixes",
+   "frags": [
+    "api/docs/guides/prompt-caching"
+   ],
+   "hit@1": true,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "Prompt caching (https://developers.openai.com/api/docs/guides/prompt-caching)"
+   ]
+  },
+  {
+   "library_name": "openai",
+   "query": "migrate from the chat completions api to the responses api",
+   "frags": [
+    "api/docs/guides/migrate-to-responses"
+   ],
+   "hit@1": true,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "Responses API (https://developers.openai.com/api/docs/guides/migrate-to-responses)",
+    "`reasoning.mode: \"pro\"` (https://developers.openai.com/api/docs/guides/reasoning#reasoning"
+   ]
+  },
+  {
+   "library_name": "openai",
+   "query": "reasoning models and how to control reasoning effort",
+   "frags": [
+    "api/docs/guides/reasoning"
+   ],
+   "hit@1": true,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "`reasoning.mode: \"pro\"` (https://developers.openai.com/api/docs/guides/reasoning#reasoning"
+   ]
+  },
+  {
+   "library_name": "tailwind",
+   "query": "grid template columns and grid column span utility classes in tailwind",
+   "frags": [
+    "docs/grid-template-columns"
+   ],
+   "hit@1": true,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "https://tailwindcss.com/docs/grid-template-columns",
+    "https://tailwindcss.com/docs/grid-column",
+    "https://tailwindcss.com/docs/grid-template-rows",
+    "https://tailwindcss.com/docs/grid-row",
+    "https://tailwindcss.com/docs/styling-with-utility-classes"
+   ]
+  },
+  {
+   "library_name": "tailwind",
+   "query": "tailwind grid auto flow and grid auto rows utilities",
+   "frags": [
+    "docs/grid-auto-flow"
+   ],
+   "hit@1": true,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "https://tailwindcss.com/docs/grid-auto-flow",
+    "https://tailwindcss.com/docs/grid-auto-rows",
+    "https://tailwindcss.com/docs/grid-auto-columns",
+    "https://tailwindcss.com/docs/grid-row",
+    "https://tailwindcss.com/docs/grid-column"
+   ]
+  },
+  {
+   "library_name": "tailwind",
+   "query": "table-layout utility classes in tailwind",
+   "frags": [
+    "docs/table-layout"
+   ],
+   "hit@1": true,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "https://tailwindcss.com/docs/table-layout",
+    "https://tailwindcss.com/",
+    "https://tailwindcss.com/docs/styling-with-utility-classes",
+    "https://tailwindcss.com/docs/detecting-classes-in-source-files",
+    "https://tailwindcss.com/docs/"
+   ]
+  },
+  {
+   "library_name": "docker",
+   "query": "run and manage containers with the docker sdk for python",
+   "frags": [
+    "containers"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "https://docker-py.readthedocs.io/"
+   ]
+  },
+  {
+   "library_name": "uv",
+   "query": "create and manage a python project with uv init and uv run",
+   "frags": [
+    "guides/projects"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "https://docs.astral.sh/uv/"
+   ]
+  },
+  {
+   "library_name": "sqlalchemy",
+   "query": "create and manage a session with sqlalchemy 2.0 sessionmaker",
+   "frags": [
+    "orm/session"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": [
+    "http://docs.sqlalchemy.org/",
+    "https://docs.sqlalchemy.org/tutorial/index",
+    "http://docs.sqlalchemy.org/latest",
+    "https://docs.sqlalchemy.org/search",
+    "https://docs.sqlalchemy.org/copyright"
+   ]
+  },
+  {
+   "library_name": "psycopg",
+   "query": "connect to postgres and run a query with psycopg cursor",
+   "error": "no_lib"
+  },
+  {
+   "library_name": "pytest",
+   "query": "share fixtures across tests with conftest and fixture scope",
+   "frags": [
+    "how-to/fixtures"
+   ],
+   "hit@1": false,
+   "hit@3": false,
+   "hit@5": false,
+   "paths": []
+  },
+  {
+   "library_name": "sqlmodel",
+   "query": "create a table and engine with sqlmodel",
+   "error": "no_lib"
+  }
+ ]
+}

@@ -23,17 +23,18 @@ from memo import server, store  # noqa: E402
 
 
 def _hit(hits, fragments) -> tuple[int, int, int]:
-    """hit@1/@3/@5: setidaknya satu fragment muncul di path hit mana pun.
-    fragments kosong -> (0,0,0) = tidak dinilai (tanpa patokan path)."""
+    """hit@1/@3/@5 kumulatif: rank hit pertama yg mengandung fragment.
+    (k<=1, k<=3, k<=5). fragments kosong -> (0,0,0) = tidak dinilai."""
     if not fragments:
         return (0, 0, 0)
     frags = [f.lower() for f in fragments]
-    best = 0
+    rank = 0
     for k, h in enumerate(hits, start=1):
         p = h["path"].lower()
         if any(f in p for f in frags):
-            best = max(best, 1 if k == 1 else (3 if k <= 3 else 5))
-    return (best >= 1, best >= 3, best >= 5) if best else (0, 0, 0)
+            rank = k
+            break
+    return (rank <= 1, rank <= 3, rank <= 5) if rank else (0, 0, 0)
 
 
 def main() -> int:
@@ -47,7 +48,7 @@ def main() -> int:
     conn = store.connect()
     emb_model = server._embeddings()
     results = []
-    scored, h1 = h3 = h5 = 0
+    scored = h1 = h3 = h5 = 0
     t0 = time.monotonic()
     for it in golden:
         lib, q = it["library_name"], it["query"]
